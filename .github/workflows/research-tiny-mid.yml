@@ -1,0 +1,42 @@
+name: research-tiny-mid
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 1 * *"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Download prices (Yahoo)
+        run: |
+          python scripts/download_prices.py --start 2000-01-01 --tickers-from-config config/universe.yml --out data/prices.csv
+
+      - name: Run tiny grid
+        run: |
+          python scripts/run_grid.py --prices data/prices.csv --config config/universe.yml --grid config/grid_tiny.yml --out-dir out_grid_tiny
+
+      - name: Run mid grid
+        run: |
+          python scripts/run_grid.py --prices data/prices.csv --config config/universe.yml --grid config/grid_mid.yml --out-dir out_grid_mid
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-tiny-mid
+          path: |
+            data/prices.csv
+            out_grid_tiny/*
+            out_grid_mid/*
