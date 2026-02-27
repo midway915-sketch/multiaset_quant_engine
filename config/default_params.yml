@@ -1,0 +1,30 @@
+weights:
+  w_1m: 0.2
+  w_6m: 0.4
+  w_12m: 0.4
+rebalance:
+  frequency: monthly
+  when: month_end
+  entry: next_close
+filters:
+  abs_mom_days: 252
+  abs_mom_min: 0.0
+  regime_ma_days: 200
+  trend_fast: 50
+  trend_slow: 200
+volatility:
+  vol_window: 20
+  vol_ref_window: 252
+  risk_window: 63
+selection:
+  top_n: 2
+  weighting: equal
+leverage:
+  enabled: true
+  thr_3x: 1.0
+  thr_2x: 1.2
+  equity_only: true
+  use_trend_confirm: true
+costs:
+  buy: 0.0007
+  sell: 0.0007

@@ -1,0 +1,26 @@
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 2
+grid:
+  weights.w_1m:
+  - 0.1
+  - 0.2
+  weights.w_6m:
+  - 0.4
+  weights.w_12m:
+  - 0.4
+  filters.regime_ma_days:
+  - 150
+  - 200
+  leverage.thr_3x:
+  - 0.9
+  - 1.0
+  leverage.thr_2x:
+  - 1.2
+  selection.top_n:
+  - 2
+ranking:
+  primary: median_calmar
+  constraints:
+    max_mdd: -0.8
