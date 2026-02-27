@@ -1,0 +1,15 @@
+[project]
+name = "multiaset-quant-engine"
+version = "0.2.0"
+description = "Multi-asset rotation with conditional 1x/2x/3x leverage, synthetic-to-real leverage switching, costs, walk-forward grid."
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "pyyaml>=6.0",
+  "pyarrow>=14.0",
+  "yfinance>=0.2.40",
+]
+
+[tool.ruff]
+line-length = 100
