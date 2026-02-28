@@ -4,36 +4,19 @@ walkforward:
   step_years: 2
 
 grid:
-  # =========================
-  # Rebalance (새 구조 기본: weekly)
-  # =========================
   rebalance.frequency: ["weekly"]
   rebalance.when: ["week_end"]
   rebalance.entry: ["next_close"]
 
-  # =========================
-  # Regime (Risk-on gate)
-  # =========================
   filters.regime_ma_days: [150, 200, 250]
 
-  # =========================
-  # Selection / Filters
-  # =========================
   selection.top_n: [1, 2, 3]
   filters.abs_mom_min: [0.00, 0.02, 0.05]
 
-  # =========================
-  # Momentum blend (가볍게만)
-  # =========================
   weights.w_1m: [0.10, 0.20]
   weights.w_6m: [0.40]
   weights.w_12m: [0.40]
 
-  # =========================
-  # Leverage (핵심: vol-target 켜/끄)
-  # - ratio 모드(thr_2x/3x)는 기본값 유지
-  # - hybrid_bull_3x는 tiny에서는 OFF 고정 (혼선/과적합 방지)
-  # =========================
   leverage.enabled: [true]
   leverage.equity_only: [true]
   leverage.use_trend_confirm: [true]
@@ -47,18 +30,8 @@ grid:
   leverage.gear_cut_2x: [1.5]
   leverage.gear_cut_3x: [2.5]
 
-  # ratio mode thresholds (vol-target OFF일 때만 의미 있음)
   leverage.thr_3x: [0.95, 1.00, 1.05]
   leverage.thr_2x: [1.20]
 
-  # =========================
-  # Costs (고정)
-  # =========================
   costs.buy: [0.0007]
   costs.sell: [0.0007]
-
-ranking:
-  primary: "median_calmar"
-  notes:
-    - "현재 run_grid.py는 summarize_by_param에서 median_calmar로 정렬(고정)합니다."
-    - "tiny에서는 규칙을 단순하게 유지하고, mid에서 best 근처만 좁혀갑니다."
