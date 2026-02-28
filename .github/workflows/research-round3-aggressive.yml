@@ -1,0 +1,39 @@
+name: research-round3-aggressive
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Download prices (Yahoo)
+        run: |
+          python scripts/download_prices.py --start 2000-01-01 --tickers-from-config config/universe.yml --out data/prices.csv
+
+      - name: Run Round3 aggressive grid
+        run: |
+          python scripts/run_grid.py \
+            --prices data/prices.csv \
+            --config config/universe.yml \
+            --grid config/grid_aggressive_round3.yml \
+            --out-dir out_grid_round3
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: round3-aggressive-results
+          path: |
+            out_grid_round3/*
+            config/grid_aggressive_round3.yml
