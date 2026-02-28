@@ -67,13 +67,55 @@ def build_signals(
         apply_dt = next_trading_day(dates, dt)
 
         if not bool(regime_on.loc[dt]):
+            pr = prices.loc[dt]
+        
+            # --- Risk Off defensive universe ---
+            defensive_assets = [
+                a for a, k in universe_kind_map.items()
+                if k in ["bond", "alt", "fx"]
+            ]
+        
+            # remove cash proxy from ranking pool
+            defensive_assets = [a for a in defensive_assets if a != cash_proxy]
+        
+            if len(defensive_assets) == 0:
+                rows.append({
+                    "signal_date": dt,
+                    "apply_date": apply_dt,
+                    "risk_on": False,
+                    "assets": [cash_proxy],
+                    "weights": {cash_proxy: 1.0},
+                    "gears": {cash_proxy: "1x"},
+                })
+                continue
+        
+            # rank by risk_adj score
+            risk_adj_row = feats["risk_adj"].loc[dt]
+            risk_adj_row = risk_adj_row.reindex(defensive_assets)
+        
+            candidates = risk_adj_row.replace([float("inf"), float("-inf")], pd.NA).dropna()
+            candidates = candidates.sort_values(ascending=False)
+        
+            if len(candidates) == 0:
+                rows.append({
+                    "signal_date": dt,
+                    "apply_date": apply_dt,
+                    "risk_on": False,
+                    "assets": [cash_proxy],
+                    "weights": {cash_proxy: 1.0},
+                    "gears": {cash_proxy: "1x"},
+                })
+                continue
+        
+            chosen = [candidates.index[0]]
+        
             rows.append({
                 "signal_date": dt,
                 "apply_date": apply_dt,
                 "risk_on": False,
-                "assets": [cash_proxy],
-                "weights": {cash_proxy: 1.0},
-                "gears": {cash_proxy: "1x"},
+                "assets": chosen,
+                "weights": {chosen[0]: 1.0},
+                "gears": {chosen[0]: "1x"},   # defensive always 1x
             })
             continue
 
