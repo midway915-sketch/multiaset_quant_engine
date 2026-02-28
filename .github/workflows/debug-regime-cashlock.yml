@@ -231,6 +231,38 @@ jobs:
           print(f"\nSaved {out_dir}/weights_slice_2023_2025.csv")
           PY
 
+      - name: Print last signal date (full)
+        run: |
+          python - << 'PY'
+          import json
+          import pandas as pd
+          from pathlib import Path
+          from quant.data.loader import load_prices_long, to_wide_adj_close
+          from quant.strategy.universe import load_universe
+          from quant.strategy import policy as pol
+
+          round_name = "${{ github.event.inputs.round_name }}"
+          params = json.loads(Path(f"configs/best/{round_name}.json").read_text(encoding="utf-8"))
+          uni = load_universe("config/universe.yml")
+
+          df_long = load_prices_long("data/prices.csv")
+          prices = to_wide_adj_close(df_long)
+          needed = [t for t in uni.tickers if t in prices.columns]
+          prices = prices[needed].dropna(how="all")
+          kind_map = uni.kind_map()
+
+          if hasattr(pol, "build_signals"):
+              sig = pol.build_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+          else:
+              sig = pol.build_monthly_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+
+          # signal_date 컬럼이 있는 구조
+          sig["signal_date"] = pd.to_datetime(sig["signal_date"])
+          print("prices last:", prices.index.max())
+          print("signals last:", sig["signal_date"].max())
+          print("signals rows:", len(sig))
+          PY
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
