@@ -7,8 +7,10 @@ from quant.core.calendar import month_end_dates, week_end_dates, next_trading_da
 from quant.strategy.scoring import compute_features
 from quant.strategy.allocator import choose_top_assets, pick_gear_for_asset
 
+
 def load_params(path: str) -> Dict:
     return yaml.safe_load(open(path, "r", encoding="utf-8"))
+
 
 def build_signals(
     prices: pd.DataFrame,
@@ -35,15 +37,23 @@ def build_signals(
     else:
         rebal_dates = month_end_dates(dates)
 
+    # Compute features (momentum, vol, etc.)
     feats = compute_features(prices, params)
 
-    # MA(trend_slow) per-asset for trend checks
-    slow = params["filters"]["trend_slow"]
+    # ---------------------------------------------------------------------
+    # IMPORTANT: allocator.py expects feats["_ma200"] to exist (injected by policy).
+    # Our weekly changes introduced "_ma_slow" only, which caused KeyError.
+    # Fix: always inject _ma200 + also keep _ma_slow for future flexibility.
+    # ---------------------------------------------------------------------
+    slow = int(params["filters"].get("trend_slow", 200))
     ma_slow_all = prices.rolling(slow).mean()
     feats["_ma_slow"] = ma_slow_all
 
+    # Always provide _ma200 for backward compatibility
+    feats["_ma200"] = prices.rolling(200).mean()
+
     # regime filter on regime_ticker
-    regime_ma_days = params["filters"]["regime_ma_days"]
+    regime_ma_days = int(params["filters"]["regime_ma_days"])
     reg = prices[regime_ticker]
     reg_ma = reg.rolling(regime_ma_days).mean()
     regime_on = (reg > reg_ma)
@@ -68,7 +78,10 @@ def build_signals(
             continue
 
         pr = prices.loc[dt]
+
+        # choose assets + weights
         chosen, wts = choose_top_assets(dt, pr, feats, universe_kind_map, {}, params)
+
         if len(chosen) == 0:
             rows.append({
                 "signal_date": dt,
@@ -80,11 +93,17 @@ def build_signals(
             })
             continue
 
+        # pick leverage gear for each chosen asset
         gears = {}
         for a in chosen:
             gears[a] = pick_gear_for_asset(
-                dt, a, universe_kind_map.get(a, "other"),
-                prices, feats, params, True
+                dt,
+                a,
+                universe_kind_map.get(a, "other"),
+                prices,
+                feats,
+                params,
+                True,
             )
 
         rows.append({
@@ -97,6 +116,7 @@ def build_signals(
         })
 
     return pd.DataFrame(rows)
+
 
 def build_monthly_signals(
     prices: pd.DataFrame,
