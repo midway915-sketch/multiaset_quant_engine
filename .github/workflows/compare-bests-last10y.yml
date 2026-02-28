@@ -1,0 +1,116 @@
+name: compare-bests-last10y
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Download prices (Yahoo, full history)
+        run: |
+          python scripts/download_prices.py \
+            --start 2000-01-01 \
+            --tickers-from-config config/universe.yml \
+            --out data/prices.csv
+
+      - name: Slice prices to last 10y (2016-03-01 ~ 2026-02-27)
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          src = "data/prices.csv"
+          dst = "data/prices_10y.csv"
+          start = "2016-03-01"
+          end   = "2026-02-27"
+
+          df = pd.read_csv(src)
+          df["date"] = pd.to_datetime(df["date"])
+          df = df[(df["date"] >= start) & (df["date"] <= end)]
+          df.to_csv(dst, index=False)
+          print("saved", dst, "rows=", len(df))
+          PY
+
+      - name: Export equity for last 10y (round5/round7b/round8)
+        run: |
+          set -e
+          mkdir -p out_last10y
+          for r in round5 round7b round8; do
+            echo "=== $r ==="
+            python scripts/export_best_equity.py \
+              --prices data/prices_10y.csv \
+              --config config/universe.yml \
+              --best-params-json configs/best/${r}.json \
+              --out-dir out_last10y/${r}
+          done
+
+      - name: Compute last10y compare table
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          import numpy as np
+          from pathlib import Path
+
+          def read_eq(p):
+            df = pd.read_csv(p)
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date")
+            s = pd.Series(df["equity"].astype(float).values, index=df["date"])
+            s = s[~s.index.duplicated(keep="last")]
+            s = s.dropna()
+            s = s[s > 0]
+            return s
+
+          def mdd(eq):
+            peak = eq.cummax()
+            dd = eq/peak - 1.0
+            return float(dd.min())
+
+          def cagr(eq):
+            start = eq.index.min()
+            end = eq.index.max()
+            years = max((end - start).days / 365.25, 1e-9)
+            mult = float(eq.iloc[-1] / eq.iloc[0])
+            return mult ** (1.0/years) - 1.0, mult, years
+
+          root = Path("out_last10y")
+          rows = []
+          for r in ["round5","round7b","round8"]:
+            eqp = root / r / "equity.csv"
+            eq = read_eq(eqp)
+            cg, mult, yrs = cagr(eq)
+            rows.append({
+              "round": r,
+              "years": yrs,
+              "final_multiple": mult,
+              "cagr": cg,
+              "mdd": mdd(eq),
+            })
+          out = pd.DataFrame(rows).sort_values("cagr", ascending=False)
+          out.to_csv(root / "compare_last10y.csv", index=False)
+          print(out.to_string(index=False))
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: compare-bests-last10y-results
+          path: |
+            out_last10y/**/equity.csv
+            out_last10y/compare_last10y.csv
+            data/prices_10y.csv
+            config/universe.yml
+            configs/best/round5.json
+            configs/best/round7b.json
+            configs/best/round8.json
