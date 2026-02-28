@@ -303,6 +303,42 @@ jobs:
           print("Saved out_debug_allocator_since_2023.csv")
           PY
 
+      - name: Debug MA200 feature (since 2023)
+        run: |
+          python - << 'PY'
+          import json
+          import pandas as pd
+          from pathlib import Path
+
+          from quant.data.loader import load_prices_long, to_wide_adj_close
+          from quant.strategy.universe import load_universe
+          from quant.strategy.features import build_features  # adjust if path differs
+
+          uni = load_universe("config/universe.yml")
+
+          df_long = load_prices_long("data/prices.csv")
+          prices = to_wide_adj_close(df_long)
+
+          needed = [t for t in uni.tickers if t in prices.columns]
+          prices = prices[needed].dropna(how="all")
+
+          feats = build_features(prices)
+
+          if "_ma200" not in feats:
+              print("No _ma200 in features!")
+          else:
+              ma = feats["_ma200"]
+              ma = ma.loc[ma.index >= "2023-01-01"]
+              print("\nMA200 tail:")
+              print(ma.tail())
+
+              null_ratio = ma.isna().mean().mean()
+              print("\nMA200 overall null ratio since 2023:", null_ratio)
+
+              ma.to_csv("out_debug_ma200_since_2023.csv")
+
+          PY
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
