@@ -1,0 +1,48 @@
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 2
+
+grid:
+  # Rebalance
+  rebalance.frequency: ["weekly"]
+  rebalance.when: ["week_end"]
+  rebalance.entry: ["next_close"]
+
+  # Regime: 더 공격적으로 (리스크온 더 자주)
+  filters.regime_ma_days: [150, 175, 200]
+
+  # Selection: top_n=1 쪽이 CAGR은 잘 뜨는 편이라 1 중심 + 2도 열어둠
+  selection.top_n: [1, 2]
+  filters.abs_mom_min: [0.00, 0.02]
+
+  # Momentum blend: 단기 비중을 더 줘서 공격성↑
+  weights.w_1m:  [0.20, 0.30, 0.40]
+  weights.w_6m:  [0.40]
+  weights.w_12m: [0.40]
+
+  # Leverage
+  leverage.enabled: [true]
+  leverage.equity_only: [true]
+
+  # trend_confirm: CAGR 우선이면 OFF 케이스도 열어야 함
+  leverage.use_trend_confirm: [false, true]
+
+  # Vol-target: 타겟 상향(=평균 레버리지↑) + lookback 짧게도 열기
+  leverage.use_vol_target: [true]
+  leverage.vol_target_annual: [0.30, 0.35, 0.40]
+  leverage.vol_lookback_days: [21, 63]
+  leverage.max_leverage: [3.0]
+  leverage.gear_cut_2x: [1.5]
+  leverage.gear_cut_3x: [2.5]
+
+  # (선택) Hybrid bull 3x: “시장 변동 낮을 때 3x 강제” -> CAGR 뻥튀기 후보
+  leverage.use_hybrid_bull_3x: [false, true]
+  leverage.bull_vol_ticker: ["SPY"]
+  leverage.bull_vol_lookback_days: [21]
+  leverage.bull_vol_max_annual: [0.22, 0.25]
+  leverage.force_3x_assets: [["QQQ", "SMH"]]
+
+  # Costs
+  costs.buy: [0.0007]
+  costs.sell: [0.0007]
