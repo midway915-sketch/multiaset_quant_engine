@@ -1,0 +1,46 @@
+# config/grid_round9_weekly_hybrid_expanded.yml
+# Round9: weekly + expanded universe + hybrid bull-3x + vol-target fallback
+
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 1
+
+grid:
+  rebalance.frequency: [weekly]
+  rebalance.when: [week_end]
+
+  # keep it close to best weekly neighborhood
+  weights.w_1m: [0.20, 0.25]
+  weights.w_6m: [0.30, 0.35]
+  weights.w_12m: [0.25, 0.30]
+
+  filters.regime_ma_days: [250]
+
+  selection.top_n: [1]
+
+  leverage.use_trend_confirm: [true, false]
+
+  # Hybrid ON
+  leverage.use_hybrid_bull_3x: [true]
+  leverage.bull_vol_ticker: [SPY]
+  leverage.bull_vol_lookback_days: [21, 63]
+  leverage.bull_vol_max_annual: [0.20, 0.25, 0.30]
+  # force 3x only where we know 3x exists
+  leverage.force_3x_assets: [[QQQ, SMH]]
+
+  # Vol-target fallback ON
+  leverage.use_vol_target: [true]
+  leverage.vol_target_annual: [0.25, 0.30, 0.35]
+  leverage.vol_lookback_days: [21, 63]
+  leverage.gear_cut_2x: [1.5, 1.6]
+  leverage.gear_cut_3x: [2.3, 2.5]
+  leverage.max_leverage: [3.0]
+
+ranking:
+  primary: median_calmar
+  constraints: {}
+  secondary:
+    - median_cagr
+    - worst_cagr
+    - mean_turnover
