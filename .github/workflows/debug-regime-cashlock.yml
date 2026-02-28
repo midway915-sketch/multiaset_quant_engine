@@ -263,12 +263,53 @@ jobs:
           print("signals rows:", len(sig))
           PY
 
+      - name: Debug allocator choices (since 2023)
+        run: |
+          python - << 'PY'
+          import json
+          import pandas as pd
+          from pathlib import Path
+
+          from quant.data.loader import load_prices_long, to_wide_adj_close
+          from quant.strategy.universe import load_universe
+          from quant.strategy import policy as pol
+
+          round_name = "${{ github.event.inputs.round_name }}"
+          params = json.loads(Path(f"configs/best/{round_name}.json").read_text(encoding="utf-8"))
+
+          uni = load_universe("config/universe.yml")
+
+          df_long = load_prices_long("data/prices.csv")
+          prices = to_wide_adj_close(df_long)
+          needed = [t for t in uni.tickers if t in prices.columns]
+          prices = prices[needed].dropna(how="all")
+
+          kind_map = uni.kind_map()
+
+          if hasattr(pol, "build_signals"):
+              sig = pol.build_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+          else:
+              sig = pol.build_monthly_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+
+          sig["signal_date"] = pd.to_datetime(sig["signal_date"])
+          sig2 = sig[sig["signal_date"] >= "2023-01-01"].copy()
+
+          # assets/weights 그대로 저장
+          sig2[["signal_date", "risk_on", "assets", "weights", "gears"]].to_csv(
+              "out_debug_allocator_since_2023.csv",
+              index=False
+          )
+
+          print("Saved out_debug_allocator_since_2023.csv")
+          PY
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: debug-regime-cashlock-${{ github.event.inputs.round_name }}
           path: |
             out_debug_spy_ma200_since_2023.csv
+            out_debug_allocator_since_2023.csv
             out_debug_signals_head_since_2023.csv
             out_debug_signals_tail_since_2023.csv
             out_debug_signals_value_counts.json
