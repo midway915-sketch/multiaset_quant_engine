@@ -7,7 +7,7 @@ import json
 
 from quant.data.loader import load_prices_long, to_wide_adj_close
 from quant.strategy.universe import load_universe
-from quant.strategy.policy import build_monthly_signals
+from quant.strategy.policy import build_signals
 from quant.data.return_provider import ReturnProvider
 from quant.backtest.engine import run_backtest
 from quant.report.metrics import cagr, max_drawdown, calmar, turnover
@@ -72,15 +72,19 @@ def main():
 
     for p in param_sets:
         pid = param_id(p)
-        # Precompute signals once per param set
-        signals_all = build_monthly_signals(prices_full, kind_map, uni.regime_ticker, uni.cash_proxy, p)
+        # Precompute signals once per param set (monthly/weekly decided by p['rebalance'])
+        signals_all = build_signals(prices_full, kind_map, uni.regime_ticker, uni.cash_proxy, p)
+
         for wi, w in enumerate(windows):
             ptest = slice_prices(prices_full, w.test_start, w.test_end)
             if len(ptest) < 300:
                 continue
 
             # Filter signals whose apply_date are in test window
-            signals = signals_all[(pd.to_datetime(signals_all["apply_date"]) >= w.test_start) & (pd.to_datetime(signals_all["apply_date"]) <= w.test_end)]
+            signals = signals_all[
+                (pd.to_datetime(signals_all["apply_date"]) >= w.test_start) &
+                (pd.to_datetime(signals_all["apply_date"]) <= w.test_end)
+            ]
 
             equity, weights, trades = run_backtest(ptest, signals, rp_full, p["costs"])
 
