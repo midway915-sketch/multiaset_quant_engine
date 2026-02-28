@@ -151,5 +151,4 @@ def pick_gear_for_asset(
     if ratio < lev["thr_2x"]:
         return "2x"
     return "1x"
-    print(dt, "pass_abs count:", int(pass_abs.sum()))
     
