@@ -1,0 +1,43 @@
+# config/grid_round8_weekly_voltarget_expanded.yml
+# Round8: weekly + expanded universe + vol-targeting gear selection
+
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 1
+
+grid:
+  rebalance.frequency: [weekly]
+  rebalance.when: [week_end]
+
+  # keep the strong weekly neighborhood (based on Round6/7b best)
+  weights.w_1m: [0.20, 0.25]
+  weights.w_6m: [0.30, 0.35]
+  weights.w_12m: [0.25, 0.30]
+
+  filters.regime_ma_days: [250]
+
+  selection.top_n: [1]
+
+  # keep trend confirm ON (vol-target already manages risk; still good to test false)
+  leverage.use_trend_confirm: [true, false]
+
+  # turn ON vol targeting
+  leverage.use_vol_target: [true]
+  leverage.vol_target_annual: [0.25, 0.30, 0.35]
+  leverage.vol_lookback_days: [21, 63]
+
+  # mapping continuous leverage -> discrete gear
+  leverage.gear_cut_2x: [1.4, 1.5, 1.6]
+  leverage.gear_cut_3x: [2.3, 2.5, 2.7]
+
+  # cap at 3x
+  leverage.max_leverage: [3.0]
+
+ranking:
+  primary: median_calmar
+  constraints: {}
+  secondary:
+    - median_cagr
+    - worst_cagr
+    - mean_turnover
