@@ -1,0 +1,153 @@
+name: debug-feature-keys-and-coverage
+
+on:
+  workflow_dispatch:
+    inputs:
+      round_name:
+        description: "which best_params to debug (round5/round7b/round8/round9)"
+        required: true
+        default: "round7b"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Download prices (2000~)
+        run: |
+          python scripts/download_prices.py \
+            --start 2000-01-01 \
+            --tickers-from-config config/universe.yml \
+            --out data/prices.csv
+
+      # 1) allocator/policy가 요구하는 feature 키들을 코드에서 뽑아냄
+      - name: Extract feature keys used by allocator/policy
+        run: |
+          set -e
+          mkdir -p out_debug_feat
+
+          echo "=== grep feats[\"...\"] keys in strategy code ==="
+          # ripgrep은 ubuntu-latest에 보통 있음. 없으면 apt-get로 설치해도 됨.
+          rg -n "feats\\[\"[^\"]+\"\\]" multiaset_quant_engine/src/quant/strategy \
+            | tee out_debug_feat/rg_feats_keys_raw.txt || true
+
+          python - << 'PY'
+          import re
+          from pathlib import Path
+
+          raw = Path("out_debug_feat/rg_feats_keys_raw.txt").read_text(encoding="utf-8", errors="ignore")
+          keys = sorted(set(re.findall(r'feats\\["([^"]+)"\\]', raw)))
+          Path("out_debug_feat/feature_keys.json").write_text(
+              __import__("json").dumps({"keys": keys}, indent=2),
+              encoding="utf-8"
+          )
+          print("Found feature keys:", keys)
+          PY
+
+      # 2) signals(assets가 왜 BIL만 나오는지) 다시 확인: 2023+만
+      - name: Dump allocator choices since 2023 (signals)
+        run: |
+          python - << 'PY'
+          import json
+          import pandas as pd
+          from pathlib import Path
+
+          from quant.data.loader import load_prices_long, to_wide_adj_close
+          from quant.strategy.universe import load_universe
+          from quant.strategy import policy as pol
+
+          round_name = "${{ github.event.inputs.round_name }}"
+          params = json.loads(Path(f"configs/best/{round_name}.json").read_text(encoding="utf-8"))
+
+          uni = load_universe("config/universe.yml")
+
+          df_long = load_prices_long("data/prices.csv")
+          prices = to_wide_adj_close(df_long)
+          needed = [t for t in uni.tickers if t in prices.columns]
+          prices = prices[needed].dropna(how="all")
+
+          kind_map = uni.kind_map()
+
+          if hasattr(pol, "build_signals"):
+              sig = pol.build_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+          else:
+              sig = pol.build_monthly_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+
+          sig["signal_date"] = pd.to_datetime(sig["signal_date"])
+          sig2 = sig[sig["signal_date"] >= "2023-01-01"].copy()
+
+          sig2[["signal_date", "risk_on", "assets", "weights", "gears"]].to_csv(
+              "out_debug_feat/allocator_choices_since_2023.csv",
+              index=False
+          )
+
+          print("signals last:", sig["signal_date"].max())
+          print("since 2023 rows:", len(sig2))
+          print("unique assets:", sig2["assets"].astype(str).unique()[:5])
+          PY
+
+      # 3) feature 커버리지 직접 체크 (내부 feature builder가 없어도 OK)
+      #    - allocator에서 요구하는 키들 중 최소한 _ma200은 우리가 직접 계산해서 "정상이어야" 함
+      - name: Check MA200 coverage since 2023 (manual)
+        run: |
+          python - << 'PY'
+          import pandas as pd
+
+          df = pd.read_csv("data/prices.csv")
+          df["date"] = pd.to_datetime(df["date"])
+          cols = set(df.columns)
+          ticker_col = "ticker" if "ticker" in cols else ("symbol" if "symbol" in cols else None)
+          px_col = "adj_close" if "adj_close" in cols else ("close" if "close" in cols else None)
+          if ticker_col is None or px_col is None:
+              raise SystemExit(f"Cannot detect columns in prices.csv. cols={list(df.columns)}")
+
+          # wide
+          wide = df.pivot(index="date", columns=ticker_col, values=px_col).sort_index()
+
+          # _ma200 equivalent per ticker
+          ma200 = wide.rolling(200, min_periods=200).mean()
+          ma200_2023 = ma200.loc[ma200.index >= "2023-01-01"]
+
+          out = []
+          for t in ma200_2023.columns:
+              s = ma200_2023[t]
+              out.append({
+                  "ticker": t,
+                  "rows": int(s.shape[0]),
+                  "nonnull": int(s.notna().sum()),
+                  "null_ratio": float(1.0 - (s.notna().sum() / max(1, s.shape[0]))),
+                  "first_nonnull": str(s.dropna().index.min()) if s.notna().any() else None,
+                  "last_nonnull": str(s.dropna().index.max()) if s.notna().any() else None,
+              })
+
+          out_df = pd.DataFrame(out).sort_values(["null_ratio","ticker"], ascending=[False, True])
+          out_df.to_csv("out_debug_feat/ma200_coverage_since_2023.csv", index=False)
+
+          print("\n=== MA200 coverage since 2023 (worst first) ===")
+          with pd.option_context("display.max_rows", 200, "display.width", 180):
+              print(out_df.to_string(index=False))
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-feature-keys-and-coverage-${{ github.event.inputs.round_name }}
+          path: |
+            out_debug_feat/rg_feats_keys_raw.txt
+            out_debug_feat/feature_keys.json
+            out_debug_feat/allocator_choices_since_2023.csv
+            out_debug_feat/ma200_coverage_since_2023.csv
+            data/prices.csv
+            config/universe.yml
+            configs/best/*.json
