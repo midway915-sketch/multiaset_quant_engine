@@ -72,15 +72,9 @@ jobs:
             out_dir="_replay_out/${label}"
             mkdir -p "${out_dir}"
 
-            # Convert JSON -> YAML params for run_single
-            python - <<'PY'
-            import json, yaml, sys, pathlib
-            json_path = pathlib.Path(sys.argv[1])
-            out_yaml  = pathlib.Path(sys.argv[2])
-            obj = json.loads(json_path.read_text(encoding="utf-8"))
-            out_yaml.write_text(yaml.safe_dump(obj, sort_keys=False, allow_unicode=True), encoding="utf-8")
-            print("wrote params yaml ->", out_yaml)
-            PY "${json_path}" "${out_dir}/params.yml"
+            # Convert JSON -> YAML params for run_single (NO heredoc)
+            python -c "import json,yaml,sys,pathlib; jp=pathlib.Path(sys.argv[1]); yp=pathlib.Path(sys.argv[2]); obj=json.loads(jp.read_text(encoding='utf-8')); yp.write_text(yaml.safe_dump(obj, sort_keys=False, allow_unicode=True), encoding='utf-8'); print('wrote params yaml ->', yp)" \
+              "${json_path}" "${out_dir}/params.yml"
 
             python scripts/run_single.py \
               --prices "${{ inputs.prices_out }}" \
