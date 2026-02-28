@@ -1,0 +1,250 @@
+name: debug-regime-cashlock
+
+on:
+  workflow_dispatch:
+    inputs:
+      round_name:
+        description: "which best_params to debug (round5/round7b/round8)"
+        required: true
+        default: "round7b"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Download prices (2000~)
+        run: |
+          python scripts/download_prices.py \
+            --start 2000-01-01 \
+            --tickers-from-config config/universe.yml \
+            --out data/prices.csv
+
+      # 1) SPY vs MA200 "현실" 체크
+      - name: Debug SPY vs MA200 (since 2023)
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          import numpy as np
+
+          df = pd.read_csv("data/prices.csv")
+          df["date"] = pd.to_datetime(df["date"])
+
+          # detect columns
+          cols = set(df.columns)
+          ticker_col = "ticker" if "ticker" in cols else ("symbol" if "symbol" in cols else None)
+          px_col = "adj_close" if "adj_close" in cols else ("close" if "close" in cols else None)
+          if ticker_col is None or px_col is None:
+              raise SystemExit(f"Cannot detect columns. cols={list(df.columns)}")
+
+          spy = df[df[ticker_col] == "SPY"][["date", px_col]].dropna().sort_values("date")
+          spy = spy.rename(columns={px_col: "spy"})
+          spy["ma200"] = spy["spy"].rolling(200, min_periods=200).mean()
+          spy["above_ma200"] = spy["spy"] > spy["ma200"]
+
+          spy2 = spy[spy["date"] >= "2023-01-01"].copy()
+          spy2["ma200_gap"] = spy2["spy"] / spy2["ma200"] - 1.0
+
+          # summary
+          pct_above = float(spy2["above_ma200"].mean() * 100.0)
+          print(f"\n[SPY vs MA200 since 2023-01-01] pct_above_ma200 = {pct_above:.2f}%")
+          print("last 15 rows:")
+          print(spy2.tail(15).to_string(index=False))
+
+          spy2.to_csv("out_debug_spy_ma200_since_2023.csv", index=False)
+          PY
+
+      # 2) policy.build_signals가 "뭘 보고" 현금으로 보내는지 확인용
+      - name: Build signals and inspect regime (since 2023)
+        run: |
+          python - << 'PY'
+          import json
+          import pandas as pd
+          from pathlib import Path
+
+          from quant.data.loader import load_prices_long, to_wide_adj_close
+          from quant.strategy.universe import load_universe
+          from quant.strategy import policy as pol
+
+          # inputs
+          round_name = "${{ github.event.inputs.round_name }}"
+          params_path = Path(f"configs/best/{round_name}.json")
+          params = json.loads(params_path.read_text(encoding="utf-8"))
+
+          uni = load_universe("config/universe.yml")
+
+          df_long = load_prices_long("data/prices.csv")
+          prices = to_wide_adj_close(df_long)
+
+          needed = [t for t in uni.tickers if t in prices.columns]
+          prices = prices[needed].dropna(how="all")
+
+          kind_map = uni.kind_map()
+
+          if hasattr(pol, "build_signals"):
+              sig = pol.build_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+          elif hasattr(pol, "build_monthly_signals"):
+              sig = pol.build_monthly_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+          else:
+              raise RuntimeError("policy has no build_signals/build_monthly_signals")
+
+          # keep only 2023+
+          sig = sig.copy()
+          if "date" in sig.columns:
+              sig["date"] = pd.to_datetime(sig["date"])
+              sig2 = sig[sig["date"] >= "2023-01-01"].copy()
+          else:
+              # if index is date
+              sig.index = pd.to_datetime(sig.index)
+              sig2 = sig.loc[sig.index >= "2023-01-01"].copy()
+
+          # Save a wide-ish peek: top columns that often exist
+          cols_want = []
+          for c in ["date", "regime", "is_risk_on", "risk_on", "trend_ok", "in_cash", "cash",
+                    "_ma200", "_regime", "regime_state", "risk_state", "chosen", "asset", "ticker"]:
+              if c in sig2.columns:
+                  cols_want.append(c)
+
+          # If none of those exist, just save head
+          out_head = sig2.head(200)
+          out_tail = sig2.tail(200)
+
+          out_head.to_csv("out_debug_signals_head_2023.csv", index=False)
+          out_tail.to_csv("out_debug_signals_tail_2023.csv", index=False)
+
+          # Count regime-like columns if present
+          summary = {}
+          for c in ["regime", "regime_state", "risk_state", "is_risk_on", "risk_on", "trend_ok", "in_cash", "cash"]:
+              if c in sig2.columns:
+                  vc = sig2[c].value_counts(dropna=False).head(50)
+                  summary[c] = vc.to_dict()
+
+          Path("out_debug_signals_value_counts.json").write_text(
+              json.dumps(summary, indent=2, default=str),
+              encoding="utf-8"
+          )
+
+          print("\nSaved out_debug_signals_head_2023.csv, out_debug_signals_tail_2023.csv, out_debug_signals_value_counts.json")
+          print(f"signals columns sample: {list(sig2.columns)[:40]}")
+          PY
+
+      # 3) 실제 weights가 왜 BIL=1인지: 동일 params로 full backtest 돌리고 weights 검사
+      - name: Export equity & weights (full) + summarize weights since 2023
+        run: |
+          python - << 'PY'
+          import json
+          import pandas as pd
+          import numpy as np
+          from pathlib import Path
+
+          from quant.data.loader import load_prices_long, to_wide_adj_close
+          from quant.strategy.universe import load_universe
+          from quant.strategy import policy as pol
+          from quant.data.return_provider import ReturnProvider
+          from quant.backtest.engine import run_backtest
+          from quant.report.artifacts import ensure_dir
+
+          round_name = "${{ github.event.inputs.round_name }}"
+          params = json.loads(Path(f"configs/best/{round_name}.json").read_text(encoding="utf-8"))
+
+          uni = load_universe("config/universe.yml")
+
+          df_long = load_prices_long("data/prices.csv")
+          prices = to_wide_adj_close(df_long)
+
+          needed = [t for t in uni.tickers if t in prices.columns]
+          prices = prices[needed].dropna(how="all")
+
+          kind_map = uni.kind_map()
+
+          if hasattr(pol, "build_signals"):
+              signals = pol.build_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+          elif hasattr(pol, "build_monthly_signals"):
+              signals = pol.build_monthly_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+          else:
+              raise RuntimeError("policy has no build_signals/build_monthly_signals")
+
+          rp = ReturnProvider(
+              prices_wide=prices,
+              inception=uni.inception,
+              annual_fees=uni.annual_fees,
+              leverage_maps=uni.leverage_maps(),
+          )
+
+          equity, weights, trades = run_backtest(prices, signals, rp, params["costs"])
+
+          out_dir = Path(f"out_debug_backtest/{round_name}")
+          ensure_dir(out_dir)
+
+          # save equity/weights quick
+          pd.DataFrame({"date": equity.index, "equity": equity.values}).to_csv(out_dir/"equity.csv", index=False)
+          try:
+              weights.to_parquet(out_dir/"weights.parquet")
+          except Exception:
+              weights.to_csv(out_dir/"weights.csv")
+
+          # summarize weights since 2023
+          w = weights.copy()
+          if "date" in w.columns:
+              w["date"] = pd.to_datetime(w["date"])
+              w = w.set_index("date")
+          else:
+              w.index = pd.to_datetime(w.index)
+          w = w.sort_index()
+
+          w2 = w[(w.index >= "2023-01-01") & (w.index <= "2025-12-31")].copy()
+          for c in w2.columns:
+              w2[c] = pd.to_numeric(w2[c], errors="coerce")
+
+          avg = w2.mean(axis=0, skipna=True).sort_values(ascending=False)
+          top = avg.head(12)
+
+          # BIL ratio days
+          bil_days = None
+          if "BIL" in w2.columns:
+              bil_days = float((w2["BIL"].fillna(0.0) > 0.999).mean() * 100.0)
+
+          out = pd.DataFrame({
+              "ticker": top.index,
+              "avg_weight_2023_2025": top.values
+          })
+          out.to_csv(out_dir/"avg_weights_2023_2025.csv", index=False)
+
+          print("\n=== avg weights 2023-2025 (top 12) ===")
+          print(out.to_string(index=False))
+          if bil_days is not None:
+              print(f"\nBIL ~100% days (2023-2025): {bil_days:.2f}%")
+
+          # Save weights slice for manual inspection
+          w2.reset_index().to_csv(out_dir/"weights_slice_2023_2025.csv", index=False)
+          print(f"\nSaved {out_dir}/weights_slice_2023_2025.csv")
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-regime-cashlock-${{ github.event.inputs.round_name }}
+          path: |
+            out_debug_spy_ma200_since_2023.csv
+            out_debug_signals_head_2023.csv
+            out_debug_signals_tail_2023.csv
+            out_debug_signals_value_counts.json
+            out_debug_backtest/**/equity.csv
+            out_debug_backtest/**/weights.parquet
+            out_debug_backtest/**/weights.csv
+            out_debug_backtest/**/avg_weights_2023_2025.csv
+            out_debug_backtest/**/weights_slice_2023_2025.csv
+            data/prices.csv
+            config/universe.yml
+            configs/best/*.json
