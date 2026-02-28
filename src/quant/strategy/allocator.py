@@ -16,7 +16,6 @@ def choose_top_assets(
 ) -> Tuple[List[str], Dict[str, float]]:
     top_n = params["selection"]["top_n"]
     abs_mom_min = params["filters"]["abs_mom_min"]
-    trend_slow = params["filters"]["trend_slow"]
 
     risk_adj_row = feats["risk_adj"].loc[dt]
     abs_mom_row = feats["abs_mom"].loc[dt]
@@ -33,7 +32,6 @@ def choose_top_assets(
         return [], {}
     if len(chosen) == 1:
         return chosen, {chosen[0]: 1.0}
-    # equal weighting
     w = 1.0 / len(chosen)
     return chosen, {t: w for t in chosen}
 
@@ -46,7 +44,6 @@ def _realized_vol_annual(prices: pd.Series, dt: pd.Timestamp, lookback: int) -> 
         return np.nan
     if dt not in prices.index:
         return np.nan
-    # slice window up to dt (inclusive)
     w = prices.loc[:dt].tail(lookback + 1)
     if len(w) < max(lookback // 2, 10):
         return np.nan
@@ -76,24 +73,39 @@ def pick_gear_for_asset(
     if not regime_on:
         return "1x"
 
-    # trend confirm optional
+    # trend confirm optional (applies before any gear logic)
     if lev.get("use_trend_confirm", True):
-        fast = params["filters"]["trend_fast"]
-        slow = params["filters"]["trend_slow"]
+        fast = int(params["filters"]["trend_fast"])
+        slow = int(params["filters"]["trend_slow"])
         ma_fast = prices[asset].rolling(fast).mean()
         ma_slow = prices[asset].rolling(slow).mean()
         if not (ma_fast.loc[dt] > ma_slow.loc[dt]):
             return "1x"
 
+    # ---------------------------------------------------------
+    # NEW: Hybrid Bull-3x mode
+    # - In calm regime (market vol <= threshold), force 3x on selected assets
+    # - Otherwise fall back to vol-target (if enabled) or ratio mode
+    # ---------------------------------------------------------
+    if lev.get("use_hybrid_bull_3x", False):
+        bull_ticker = str(lev.get("bull_vol_ticker", "SPY"))
+        bull_lookback = int(lev.get("bull_vol_lookback_days", 21))
+        bull_vol_max = float(lev.get("bull_vol_max_annual", 0.25))
+        force_3x_assets = lev.get("force_3x_assets", ["QQQ", "SMH"])
+
+        if bull_ticker in prices.columns and asset in force_3x_assets:
+            mvol = _realized_vol_annual(prices[bull_ticker], dt, bull_lookback)
+            if np.isfinite(mvol) and mvol <= bull_vol_max:
+                return "3x"
+
     # -----------------------------
-    # NEW: Vol targeting leverage mode (discretized to 1x/2x/3x)
+    # Vol targeting leverage mode (discretized to 1x/2x/3x)
     # -----------------------------
     if lev.get("use_vol_target", False):
         target = float(lev.get("vol_target_annual", 0.30))
         lookback = int(lev.get("vol_lookback_days", 63))
         max_lev = float(lev.get("max_leverage", 3.0))
 
-        # cutoffs to map continuous L -> discrete gear
         cut_2x = float(lev.get("gear_cut_2x", 1.5))  # >= this => 2x
         cut_3x = float(lev.get("gear_cut_3x", 2.5))  # >= this => 3x
 
