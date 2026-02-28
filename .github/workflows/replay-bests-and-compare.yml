@@ -37,7 +37,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .
-          pip install pyyaml
+          pip install pyyaml pyarrow
 
       - name: Download prices (yfinance)
         run: |
@@ -57,7 +57,6 @@ jobs:
 
           shopt -s nullglob
           FILES=("${{ inputs.best_dir }}"/*.json)
-
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "ERROR: No .json files found in ${{ inputs.best_dir }}"
             exit 1
@@ -66,13 +65,12 @@ jobs:
           for json_path in "${FILES[@]}"; do
             base="$(basename "$json_path")"
             label="${base%.json}"
-
-            echo "==> replay: ${label} from ${json_path}"
-
             out_dir="_replay_out/${label}"
             mkdir -p "${out_dir}"
 
-            # Convert JSON -> YAML params for run_single (NO heredoc)
+            echo "==> replay: ${label} from ${json_path}"
+
+            # Convert JSON -> YAML params for run_single
             python -c "import json,yaml,sys,pathlib; jp=pathlib.Path(sys.argv[1]); yp=pathlib.Path(sys.argv[2]); obj=json.loads(jp.read_text(encoding='utf-8')); yp.write_text(yaml.safe_dump(obj, sort_keys=False, allow_unicode=True), encoding='utf-8'); print('wrote params yaml ->', yp)" \
               "${json_path}" "${out_dir}/params.yml"
 
@@ -81,9 +79,12 @@ jobs:
               --config "${{ inputs.universe_config }}" \
               --params "${out_dir}/params.yml" \
               --out-dir "${out_dir}"
+
+            echo "DEBUG: outputs under ${out_dir}"
+            find "${out_dir}" -maxdepth 4 -type f | sed 's|^|  |'
           done
 
-      - name: Build expanded compare_table.csv
+      - name: Build expanded compare_table.csv (prefer parquet)
         shell: bash
         run: |
           set -euo pipefail
@@ -92,13 +93,24 @@ jobs:
           for d in _replay_out/*; do
             [ -d "$d" ] || continue
             label="$(basename "$d")"
+
+            eq_pq="$d/equity.parquet"
             eq_csv="$d/equity.csv"
-            if [ -f "$eq_csv" ]; then
+
+            if [ -f "$eq_pq" ]; then
+              ARGS+=(--label-and-equity "${label}=${eq_pq}")
+            elif [ -f "$eq_csv" ]; then
               ARGS+=(--label-and-equity "${label}=${eq_csv}")
             else
-              echo "WARN: missing equity.csv for ${label} at ${eq_csv}"
+              echo "WARN: missing equity.{parquet|csv} for ${label} under $d"
             fi
           done
+
+          if [ ${#ARGS[@]} -eq 0 ]; then
+            echo "ERROR: no equity.{parquet|csv} found anywhere under _replay_out/*"
+            find _replay_out -maxdepth 4 -type f | sed 's|^|  |'
+            exit 1
+          fi
 
           python scripts/build_compare_table.py \
             "${ARGS[@]}" \
@@ -107,7 +119,8 @@ jobs:
           echo "==> compare_table saved: _replay_out/compare_table.csv"
           head -n 50 _replay_out/compare_table.csv || true
 
-      - name: Upload replay outputs
+      - name: Upload replay outputs (ALWAYS)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: replay_outputs
