@@ -6,7 +6,7 @@ import pandas as pd
 
 from quant.data.loader import load_prices_long, to_wide_adj_close
 from quant.strategy.universe import load_universe
-from quant.strategy.policy import load_params, build_monthly_signals
+from quant.strategy.policy import load_params, build_signals
 from quant.data.return_provider import ReturnProvider
 from quant.backtest.engine import run_backtest
 from quant.report.metrics import cagr, max_drawdown, calmar, turnover
@@ -32,9 +32,9 @@ def main():
     needed = [t for t in uni.tickers if t in prices.columns]
     prices = prices[needed].dropna(how="all")
 
-    # Build signals
+    # Build signals (monthly/weekly decided by params['rebalance'])
     kind_map = uni.kind_map()
-    signals = build_monthly_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
+    signals = build_signals(prices, kind_map, uni.regime_ticker, uni.cash_proxy, params)
 
     rp = ReturnProvider(
         prices_wide=prices,
