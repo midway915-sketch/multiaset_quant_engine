@@ -1,0 +1,71 @@
+regime_ticker: SPY
+cash_proxy: BIL
+
+assets:
+  - ticker: SPY
+    kind: equity
+
+  - ticker: QQQ
+    kind: equity
+    lev2: QLD
+    lev3: TQQQ
+
+  - ticker: IWM
+    kind: equity
+
+  - ticker: XLK
+    kind: equity
+
+  - ticker: XLY
+    kind: equity
+
+  - ticker: SMH
+    kind: equity
+    lev3: SOXL
+
+  - ticker: GLD
+    kind: alt
+
+  - ticker: DBC
+    kind: alt
+
+  - ticker: DBMF
+    kind: alt_trend
+
+  - ticker: KMLM
+    kind: alt_trend
+
+  - ticker: RPAR
+    kind: multi_asset
+
+  - ticker: UPAR
+    kind: multi_asset
+
+  - ticker: IEF
+    kind: bond
+
+  - ticker: TLT
+    kind: bond
+
+  - ticker: UUP
+    kind: fx
+
+  - ticker: BIL
+    kind: cash
+
+inception:
+  UPRO: '2009-06-25'
+  TQQQ: '2010-02-09'
+  SOXL: '2010-03-11'
+  QLD:  '2006-06-21'
+  SSO:  '2006-06-21'
+  BIL:  '2007-05-25'
+  DBMF: '2019-05-08'
+  KMLM: '2020-12-01'
+  RPAR: '2019-12-12'
+  UPAR: '2022-01-03'
+
+annual_fees:
+  1x: 0.0
+  2x: 0.0095
+  3x: 0.0095
