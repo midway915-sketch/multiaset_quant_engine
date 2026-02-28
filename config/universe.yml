@@ -1,40 +1,75 @@
 regime_ticker: SPY
 cash_proxy: BIL
+
 assets:
 - ticker: SPY
   kind: equity
+
 - ticker: QQQ
   kind: equity
   lev2: QLD
   lev3: TQQQ
+
 - ticker: IWM
   kind: equity
+
 - ticker: XLK
   kind: equity
+
 - ticker: XLY
   kind: equity
+
 - ticker: SMH
   kind: equity
   lev3: SOXL
+
 - ticker: GLD
   kind: alt
+
 - ticker: DBC
   kind: alt
+
+# === NEW: Managed Futures / Trend (alternatives) ===
+- ticker: DBMF
+  kind: alt_trend
+
+- ticker: KMLM
+  kind: alt_trend
+
+# === NEW: Risk Parity (multi-asset) ===
+- ticker: RPAR
+  kind: multi_asset
+
+- ticker: UPAR
+  kind: multi_asset
+
 - ticker: IEF
   kind: bond
+
 - ticker: TLT
   kind: bond
+
 - ticker: UUP
   kind: fx
+
 - ticker: BIL
   kind: cash
+
 inception:
+  # Existing leveraged ETF inception guards
   UPRO: '2009-06-25'
   TQQQ: '2010-02-09'
   SOXL: '2010-03-11'
-  QLD: '2006-06-21'
-  SSO: '2006-06-21'
-  BIL: '2007-05-25'
+  QLD:  '2006-06-21'
+  SSO:  '2006-06-21'
+  BIL:  '2007-05-25'
+
+  # NEW additions (to prevent pre-inception backtest contamination)
+  DBMF: '2019-05-08'   # iMGP DBi Managed Futures Strategy ETF  [oai_citation:4‡etf.com](https://www.etf.com/DBMF?utm_source=chatgpt.com)
+  KMLM: '2020-12-01'   # KraneShares Mount Lucas Managed Futures Index Strategy ETF  [oai_citation:5‡KraneShares](https://kraneshares.com/etf/kmlm/?utm_source=chatgpt.com)
+  RPAR: '2019-12-12'   # RPAR Risk Parity ETF  [oai_citation:6‡RPAR Risk Parity ETF](https://www.rparetf.com/rpar?utm_source=chatgpt.com)
+  UPAR: '2022-01-03'   # UPAR Ultra Risk Parity ETF  [oai_citation:7‡RPAR Risk Parity ETF](https://www.rparetf.com/upar?utm_source=chatgpt.com)
+
 annual_fees:
   1x: 0.0
   2x: 0.0095
