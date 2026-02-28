@@ -17,11 +17,11 @@ def choose_top_assets(
     top_n = params["selection"]["top_n"]
     abs_mom_min = params["filters"]["abs_mom_min"]
 
-    # --- robust alignment ---
-    # ensure all feature rows align to prices universe
     risk_adj_row = feats["risk_adj"].loc[dt]
     abs_mom_row = feats["abs_mom"].loc[dt]
 
+    # --- robust alignment ---
+    # ensure all feature rows align to prices universe
     risk_adj_row = risk_adj_row.reindex(prices_row.index)
     abs_mom_row = abs_mom_row.reindex(prices_row.index)
 
@@ -30,15 +30,31 @@ def choose_top_assets(
     if isinstance(ma200_row, pd.Series):
         ma200_row = ma200_row.reindex(prices_row.index)
     else:
-        # very defensive fallback
         ma200_row = pd.Series(index=prices_row.index, data=np.nan)
 
     # absolute filters per asset
     pass_abs = (abs_mom_row > abs_mom_min) & (prices_row > ma200_row)
-    # NaN in comparisons should NOT silently nuke everything
     pass_abs = pass_abs.fillna(False)
-    print(dt, "pass_abs count:", int(pass_abs.sum()))
-    # candidates: risk_adj among those passing absolute filters
+
+    # -------------------------
+    # DEBUG: find why we always fall back to cash
+    # print only early-month-ish to reduce log spam
+    # -------------------------
+    if dt >= pd.Timestamp("2023-01-01") and dt.day <= 7:
+        n_pass = int(pass_abs.sum())
+        n_riskadj = int(risk_adj_row[pass_abs].notna().sum())
+        print(dt, "pass_abs:", n_pass, "risk_adj non-null among pass_abs:", n_riskadj)
+        if n_pass > 0:
+            sample = (
+                risk_adj_row[pass_abs]
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+                .sort_values(ascending=False)
+                .head(5)
+                .to_dict()
+            )
+            print("risk_adj sample:", sample)
+
     candidates = risk_adj_row[pass_abs].replace([np.inf, -np.inf], np.nan).dropna()
     candidates = candidates.sort_values(ascending=False)
 
@@ -99,6 +115,8 @@ def pick_gear_for_asset(
 
     # ---------------------------------------------------------
     # NEW: Hybrid Bull-3x mode
+    # - In calm regime (market vol <= threshold), force 3x on selected assets
+    # - Otherwise fall back to vol-target (if enabled) or ratio mode
     # ---------------------------------------------------------
     if lev.get("use_hybrid_bull_3x", False):
         bull_ticker = str(lev.get("bull_vol_ticker", "SPY"))
@@ -151,4 +169,3 @@ def pick_gear_for_asset(
     if ratio < lev["thr_2x"]:
         return "2x"
     return "1x"
-    
