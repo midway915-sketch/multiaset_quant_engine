@@ -1,0 +1,122 @@
+name: replay-bests-and-compare
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_config:
+        description: "Universe config YAML path (repo-relative)"
+        required: true
+        default: "config/universe.yml"
+      start_date:
+        description: "Price download start date (YYYY-MM-DD)"
+        required: true
+        default: "2000-01-01"
+      best_dir:
+        description: "Directory containing best json files"
+        required: true
+        default: "configs/best"
+      prices_out:
+        description: "Downloaded prices output path"
+        required: true
+        default: "data/prices.csv"
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pyyaml
+
+      - name: Download prices (yfinance)
+        run: |
+          python scripts/download_prices.py \
+            --start "${{ inputs.start_date }}" \
+            --out "${{ inputs.prices_out }}" \
+            --tickers-from-config "${{ inputs.universe_config }}"
+
+      - name: Replay best configs (auto-scan configs/best/*.json)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _replay_out
+
+          echo "Scanning best configs in: ${{ inputs.best_dir }}"
+          ls -la "${{ inputs.best_dir }}" || true
+
+          shopt -s nullglob
+          FILES=("${{ inputs.best_dir }}"/*.json)
+
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "ERROR: No .json files found in ${{ inputs.best_dir }}"
+            exit 1
+          fi
+
+          for json_path in "${FILES[@]}"; do
+            base="$(basename "$json_path")"
+            label="${base%.json}"
+
+            echo "==> replay: ${label} from ${json_path}"
+
+            out_dir="_replay_out/${label}"
+            mkdir -p "${out_dir}"
+
+            # Convert JSON -> YAML params for run_single
+            python - <<'PY'
+import json, yaml, sys, pathlib
+json_path = pathlib.Path(sys.argv[1])
+out_yaml  = pathlib.Path(sys.argv[2])
+obj = json.loads(json_path.read_text(encoding="utf-8"))
+out_yaml.write_text(yaml.safe_dump(obj, sort_keys=False, allow_unicode=True), encoding="utf-8")
+print("wrote params yaml ->", out_yaml)
+PY "${json_path}" "${out_dir}/params.yml"
+
+            python scripts/run_single.py \
+              --prices "${{ inputs.prices_out }}" \
+              --config "${{ inputs.universe_config }}" \
+              --params "${out_dir}/params.yml" \
+              --out-dir "${out_dir}"
+          done
+
+      - name: Build expanded compare_table.csv
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARGS=()
+          for d in _replay_out/*; do
+            [ -d "$d" ] || continue
+            label="$(basename "$d")"
+            eq_csv="$d/equity.csv"
+            if [ -f "$eq_csv" ]; then
+              ARGS+=(--label-and-equity "${label}=${eq_csv}")
+            else
+              echo "WARN: missing equity.csv for ${label} at ${eq_csv}"
+            fi
+          done
+
+          python scripts/build_compare_table.py \
+            "${ARGS[@]}" \
+            --out-csv "_replay_out/compare_table.csv"
+
+          echo "==> compare_table saved: _replay_out/compare_table.csv"
+          head -n 50 _replay_out/compare_table.csv || true
+
+      - name: Upload replay outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay_outputs
+          path: |
+            _replay_out/**
+            data/prices.csv
