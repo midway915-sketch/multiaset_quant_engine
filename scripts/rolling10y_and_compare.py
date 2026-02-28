@@ -1,137 +1,152 @@
 from __future__ import annotations
-
 import argparse
 import json
+import math
 from pathlib import Path
+from typing import Tuple, Dict, Any
+
 import numpy as np
 import pandas as pd
 
 
-def read_equity(path: Path) -> pd.Series:
+def _read_equity_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
-    if "date" not in df.columns or "equity" not in df.columns:
-        raise ValueError(f"equity.csv must have columns: date,equity. got={list(df.columns)}")
 
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date")
-    s = pd.Series(df["equity"].astype(float).values, index=pd.DatetimeIndex(df["date"]))
-    s = s[~s.index.duplicated(keep="last")]
-    s = s.dropna()
-    s = s[s > 0]
-    return s
+    # normalize column names
+    cols = {c: c.strip().lower() for c in df.columns}
+    df = df.rename(columns=cols)
+
+    # try to find date-like column
+    date_col = None
+    for c in ["date", "dt", "timestamp", "time"]:
+        if c in df.columns:
+            date_col = c
+            break
+
+    if date_col is None:
+        # assume first column is date
+        date_col = df.columns[0]
+
+    # parse date
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=[date_col]).sort_values(date_col)
+
+    # try to find equity column
+    eq_col = None
+    for c in ["equity", "nav", "value", "portfolio_value"]:
+        if c in df.columns:
+            eq_col = c
+            break
+    if eq_col is None:
+        # fallback: last numeric column
+        num_cols = [c for c in df.columns if c != date_col and pd.api.types.is_numeric_dtype(df[c])]
+        if not num_cols:
+            raise ValueError(f"Cannot find equity column in {path}. Columns={list(df.columns)}")
+        eq_col = num_cols[-1]
+
+    out = df[[date_col, eq_col]].rename(columns={date_col: "date", eq_col: "equity"}).copy()
+    out = out.dropna(subset=["equity"])
+    return out
 
 
-def compute_mdd(equity: pd.Series) -> float:
-    peak = equity.cummax()
-    dd = equity / peak - 1.0
-    return float(dd.min())
+def _max_drawdown(equity: pd.Series) -> float:
+    # equity must be positive
+    s = equity.astype(float)
+    peak = s.cummax()
+    dd = (s / peak) - 1.0
+    return float(dd.min()) if len(dd) else float("nan")
 
 
-def rolling10y_stats(equity: pd.Series, window_days: int = 3652):
-    """
-    True rolling 10y seed multiple & CAGR from equity curve.
-    We align equity(t) with equity(t - 10y) using merge_asof.
-    """
-    idx = equity.index
-    cur = pd.DataFrame({"date": idx, "equity": equity.values}).sort_values("date")
-    past = pd.DataFrame({"date": idx, "equity_past": equity.values}).sort_values("date")
+def _cagr_from_multiple(multiple: float, years: float) -> float:
+    if not np.isfinite(multiple) or multiple <= 0 or years <= 0:
+        return float("nan")
+    return float(multiple ** (1.0 / years) - 1.0)
 
-    cur["date_past_target"] = cur["date"] - pd.Timedelta(days=window_days)
 
-    # align to nearest earlier past date (<= target)
-    aligned = pd.merge_asof(
-        cur.sort_values("date_past_target"),
-        past,
-        left_on="date_past_target",
-        right_on="date",
-        direction="backward",
-        allow_exact_matches=True,
-    )
+def _window_metrics(eq_df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> Dict[str, float]:
+    w = eq_df[(eq_df["date"] >= start) & (eq_df["date"] <= end)].copy()
+    if len(w) < 50:
+        return {"multiple": float("nan"), "cagr": float("nan"), "mdd": float("nan")}
 
-    # ---- FIX: normalize date column after merge_asof ----
-    # Depending on pandas behavior, we might get date_x/date_y or just date.
-    if "date_x" in aligned.columns:
-        aligned["date"] = aligned["date_x"]
-    elif "date" not in aligned.columns and "date_past_target" in aligned.columns:
-        # fallback: use the current date from cur (should exist as date_x in most cases)
-        raise KeyError(f"merge_asof output missing 'date'/'date_x'. cols={list(aligned.columns)}")
+    e0 = float(w["equity"].iloc[0])
+    e1 = float(w["equity"].iloc[-1])
+    multiple = e1 / e0 if e0 > 0 else float("nan")
 
-    # compute rolling multiple & CAGR
-    aligned["roll10y_multiple"] = aligned["equity"] / aligned["equity_past"]
-    years = window_days / 365.25
-    aligned["roll10y_cagr"] = aligned["roll10y_multiple"] ** (1.0 / years) - 1.0
+    years = (w["date"].iloc[-1] - w["date"].iloc[0]).days / 365.25
+    cagr = _cagr_from_multiple(multiple, years)
+    mdd = _max_drawdown(w["equity"])
+    return {"multiple": float(multiple), "cagr": float(cagr), "mdd": float(mdd)}
 
-    aligned = aligned.replace([np.inf, -np.inf], np.nan).dropna(subset=["roll10y_multiple", "roll10y_cagr"])
-    aligned = aligned[aligned["roll10y_multiple"] > 0].copy()
 
-    aligned = aligned.sort_values("date")[["date", "roll10y_multiple", "roll10y_cagr"]]
+def rolling10y_stats(eq_df: pd.DataFrame, window_years: int = 10) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    eq_df = eq_df.sort_values("date").reset_index(drop=True)
 
-    stats = {}
-    if len(aligned):
-        stats = {
-            "final_multiple_full_period": float(equity.iloc[-1] / equity.iloc[0]),
-            "mdd_full_period": float(compute_mdd(equity)),
-            "roll10y_multiple_median": float(aligned["roll10y_multiple"].median()),
-            "roll10y_multiple_p10": float(aligned["roll10y_multiple"].quantile(0.10)),
-            "roll10y_multiple_p90": float(aligned["roll10y_multiple"].quantile(0.90)),
-            "roll10y_cagr_median": float(aligned["roll10y_cagr"].median()),
-            "roll10y_cagr_p10": float(aligned["roll10y_cagr"].quantile(0.10)),
-            "roll10y_cagr_p90": float(aligned["roll10y_cagr"].quantile(0.90)),
-            "roll10y_cagr_min": float(aligned["roll10y_cagr"].min()),
-            "roll10y_cagr_max": float(aligned["roll10y_cagr"].max()),
-        }
+    start_min = eq_df["date"].min()
+    end_max = eq_df["date"].max()
 
-    return aligned, stats
+    rows = []
+    # end dates: every row date (but we can thin if needed)
+    for end in eq_df["date"]:
+        start = end - pd.DateOffset(years=window_years)
+        if start < start_min:
+            continue
+        m = _window_metrics(eq_df, start, end)
+        if not np.isfinite(m["cagr"]):
+            continue
+        rows.append({
+            "date": end,
+            "roll10y_multiple": m["multiple"],
+            "roll10y_cagr": m["cagr"],
+            "roll10y_mdd": m["mdd"],
+        })
+
+    roll = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+
+    # summary stats
+    stats = {
+        "n_windows": int(len(roll)),
+        "median_cagr": float(roll["roll10y_cagr"].median()) if len(roll) else float("nan"),
+        "median_mdd": float(roll["roll10y_mdd"].median()) if len(roll) else float("nan"),
+        "median_calmar": float((roll["roll10y_cagr"] / (-roll["roll10y_mdd"])).replace([np.inf, -np.inf], np.nan).median()) if len(roll) else float("nan"),
+        "worst_cagr": float(roll["roll10y_cagr"].min()) if len(roll) else float("nan"),
+        "p10_cagr": float(roll["roll10y_cagr"].quantile(0.10)) if len(roll) else float("nan"),
+        "p90_cagr": float(roll["roll10y_cagr"].quantile(0.90)) if len(roll) else float("nan"),
+    }
+
+    # last 10y (single trailing window)
+    last_end = end_max
+    last_start = last_end - pd.DateOffset(years=window_years)
+    last = _window_metrics(eq_df, last_start, last_end)
+    stats.update({
+        "last10y_cagr": last["cagr"],
+        "last10y_multiple": last["multiple"],
+        "last10y_mdd": last["mdd"],
+        "last10y_start": str(last_start.date()),
+        "last10y_end": str(last_end.date()),
+    })
+
+    return roll, stats
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True, help="out_compare")
-    ap.add_argument("--rounds", default="round5,round6,round7a,round7b,round8,round9")
+    ap.add_argument("--equity-csv", required=True)
+    ap.add_argument("--out-rolling-csv", default="rolling10y.csv")
+    ap.add_argument("--out-stats-json", default="rolling10y_stats.json")
     args = ap.parse_args()
 
-    root = Path(args.root)
-    rounds = [r.strip() for r in args.rounds.split(",") if r.strip()]
+    eq = _read_equity_csv(args.equity_csv)
+    roll_df, stats = rolling10y_stats(eq, window_years=10)
 
-    rows = []
-    for r in rounds:
-        eq_path = root / r / "equity.csv"
-        if not eq_path.exists():
-            print(f"[skip] missing {eq_path}")
-            continue
+    Path(args.out_rolling_csv).parent.mkdir(parents=True, exist_ok=True)
+    roll_df.to_csv(args.out_rolling_csv, index=False)
 
-        eq = read_equity(eq_path)
-        roll_df, stats = rolling10y_stats(eq)
+    Path(args.out_stats_json).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out_stats_json, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
 
-        if len(roll_df):
-            roll_df.to_csv(root / r / "rolling10y.csv", index=False)
-
-        (root / r / "rolling10y_stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
-
-        rows.append({"round": r, **stats})
-
-    out = pd.DataFrame(rows)
-    if len(out) == 0:
-        raise RuntimeError("No rounds produced stats. Check equity.csv generation step.")
-
-    out = out.sort_values(["roll10y_cagr_median", "final_multiple_full_period"], ascending=False)
-
-    out_csv = root / "compare_table.csv"
-    out.to_csv(out_csv, index=False)
-    print(f"saved -> {out_csv}")
-
-    show = [
-        "round",
-        "final_multiple_full_period",
-        "mdd_full_period",
-        "roll10y_cagr_median",
-        "roll10y_cagr_p10",
-        "roll10y_cagr_min",
-        "roll10y_cagr_p90",
-    ]
-    show = [c for c in show if c in out.columns]
-    with pd.option_context("display.width", 160, "display.max_columns", 200):
-        print(out[show].to_string(index=False))
+    print("equity last:", eq["date"].max())
+    print("rolling windows:", stats.get("n_windows"))
 
 
 if __name__ == "__main__":
