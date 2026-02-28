@@ -1,0 +1,64 @@
+name: research-round10-attack
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Price download start date (YYYY-MM-DD)"
+        required: true
+        default: "2000-01-01"
+      universe_config:
+        description: "Universe config YAML path"
+        required: true
+        default: "config/universe_round10.yml"
+      grid_config:
+        description: "Grid config YAML path"
+        required: true
+        default: "config/grid_round10_attack.yml"
+      out_dir:
+        description: "Output directory"
+        required: true
+        default: "_out/round10_attack"
+
+jobs:
+  run-grid:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pyyaml pyarrow
+
+      - name: Download prices (yfinance)
+        run: |
+          mkdir -p data
+          python scripts/download_prices.py \
+            --start "${{ inputs.start_date }}" \
+            --out "data/prices.csv" \
+            --tickers-from-config "${{ inputs.universe_config }}"
+
+      - name: Run grid (round10 attack)
+        run: |
+          python scripts/run_grid.py \
+            --prices "data/prices.csv" \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --out-dir "${{ inputs.out_dir }}"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: round10_attack_outputs
+          path: |
+            data/prices.csv
+            ${{ inputs.out_dir }}/**
