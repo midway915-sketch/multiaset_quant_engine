@@ -38,24 +38,26 @@ jobs:
           mkdir -p out_debug_feat
 
           echo "=== grep feats[\"...\"] keys in strategy code ==="
-          # ripgrep은 ubuntu-latest에 보통 있음. 없으면 apt-get로 설치해도 됨.
-          rg -n "feats\\[\"[^\"]+\"\\]" multiaset_quant_engine/src/quant/strategy \
+          rg -n 'feats\["[^"]+"\]' multiaset_quant_engine/src/quant/strategy \
             | tee out_debug_feat/rg_feats_keys_raw.txt || true
 
           python - << 'PY'
-          import re
+          import re, json
           from pathlib import Path
 
           raw = Path("out_debug_feat/rg_feats_keys_raw.txt").read_text(encoding="utf-8", errors="ignore")
-          keys = sorted(set(re.findall(r'feats\\["([^"]+)"\\]', raw)))
+
+          # ✅ FIXED regex (no over-escaping)
+          keys = sorted(set(re.findall(r'feats\["([^"]+)"\]', raw)))
+
           Path("out_debug_feat/feature_keys.json").write_text(
-              __import__("json").dumps({"keys": keys}, indent=2),
+              json.dumps({"keys": keys}, indent=2),
               encoding="utf-8"
           )
           print("Found feature keys:", keys)
           PY
 
-      # 2) signals(assets가 왜 BIL만 나오는지) 다시 확인: 2023+만
+      # 2) allocator 결과 (2023+)
       - name: Dump allocator choices since 2023 (signals)
         run: |
           python - << 'PY'
@@ -97,8 +99,7 @@ jobs:
           print("unique assets:", sig2["assets"].astype(str).unique()[:5])
           PY
 
-      # 3) feature 커버리지 직접 체크 (내부 feature builder가 없어도 OK)
-      #    - allocator에서 요구하는 키들 중 최소한 _ma200은 우리가 직접 계산해서 "정상이어야" 함
+      # 3) MA200 커버리지 (수동 계산)
       - name: Check MA200 coverage since 2023 (manual)
         run: |
           python - << 'PY'
@@ -112,10 +113,7 @@ jobs:
           if ticker_col is None or px_col is None:
               raise SystemExit(f"Cannot detect columns in prices.csv. cols={list(df.columns)}")
 
-          # wide
           wide = df.pivot(index="date", columns=ticker_col, values=px_col).sort_index()
-
-          # _ma200 equivalent per ticker
           ma200 = wide.rolling(200, min_periods=200).mean()
           ma200_2023 = ma200.loc[ma200.index >= "2023-01-01"]
 
