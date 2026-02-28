@@ -5,6 +5,7 @@ import pandas as pd
 
 from quant.features.trend import sma
 
+
 def choose_top_assets(
     dt: pd.Timestamp,
     prices_row: pd.Series,
@@ -36,6 +37,28 @@ def choose_top_assets(
     w = 1.0 / len(chosen)
     return chosen, {t: w for t in chosen}
 
+
+def _realized_vol_annual(prices: pd.Series, dt: pd.Timestamp, lookback: int) -> float:
+    """
+    Realized annualized vol using daily close-to-close returns over lookback days ending at dt.
+    """
+    if prices is None or len(prices) == 0:
+        return np.nan
+    if dt not in prices.index:
+        return np.nan
+    # slice window up to dt (inclusive)
+    w = prices.loc[:dt].tail(lookback + 1)
+    if len(w) < max(lookback // 2, 10):
+        return np.nan
+    rets = w.pct_change().dropna()
+    if len(rets) < max(lookback // 2, 10):
+        return np.nan
+    vol_daily = float(rets.std(ddof=0))
+    if not np.isfinite(vol_daily) or vol_daily <= 0:
+        return np.nan
+    return vol_daily * np.sqrt(252.0)
+
+
 def pick_gear_for_asset(
     dt: pd.Timestamp,
     asset: str,
@@ -62,6 +85,36 @@ def pick_gear_for_asset(
         if not (ma_fast.loc[dt] > ma_slow.loc[dt]):
             return "1x"
 
+    # -----------------------------
+    # NEW: Vol targeting leverage mode (discretized to 1x/2x/3x)
+    # -----------------------------
+    if lev.get("use_vol_target", False):
+        target = float(lev.get("vol_target_annual", 0.30))
+        lookback = int(lev.get("vol_lookback_days", 63))
+        max_lev = float(lev.get("max_leverage", 3.0))
+
+        # cutoffs to map continuous L -> discrete gear
+        cut_2x = float(lev.get("gear_cut_2x", 1.5))  # >= this => 2x
+        cut_3x = float(lev.get("gear_cut_3x", 2.5))  # >= this => 3x
+
+        vol = _realized_vol_annual(prices[asset], dt, lookback)
+        if not np.isfinite(vol) or vol <= 0:
+            return "1x"
+
+        L = target / vol
+        if not np.isfinite(L):
+            return "1x"
+        L = max(0.0, min(max_lev, L))
+
+        if L >= cut_3x:
+            return "3x"
+        if L >= cut_2x:
+            return "2x"
+        return "1x"
+
+    # -----------------------------
+    # Existing: ratio mode (v20 / v1y)
+    # -----------------------------
     v20 = feats["vol20"].loc[dt, asset]
     v1y = feats["vol1y"].loc[dt, asset]
     if pd.isna(v20) or pd.isna(v1y) or v1y == 0:
