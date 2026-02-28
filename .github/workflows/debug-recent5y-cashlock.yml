@@ -1,0 +1,181 @@
+name: debug-recent5y-cashlock
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      # 1) 가격 다운로드
+      - name: Download prices (2000~)
+        run: |
+          python scripts/download_prices.py \
+            --start 2000-01-01 \
+            --tickers-from-config config/universe.yml \
+            --out data/prices.csv
+
+      # 2) 2023 이후 데이터 커버리지 체크
+      - name: Check price coverage since 2023-01-01
+        run: |
+          python - << 'PY'
+          import pandas as pd
+
+          src = "data/prices.csv"
+          df = pd.read_csv(src)
+          if "date" not in df.columns:
+            raise SystemExit("prices.csv must have 'date' column (long format)")
+
+          df["date"] = pd.to_datetime(df["date"])
+          df2 = df[df["date"] >= "2023-01-01"].copy()
+
+          # try to detect column names
+          # expected long format: date,ticker,adj_close (or close)
+          cols = set(df2.columns)
+          ticker_col = "ticker" if "ticker" in cols else ("symbol" if "symbol" in cols else None)
+          px_col = "adj_close" if "adj_close" in cols else ("close" if "close" in cols else None)
+
+          if ticker_col is None or px_col is None:
+            raise SystemExit(f"Cannot detect long columns. cols={list(df2.columns)}")
+
+          g = df2.groupby(ticker_col)
+
+          out = g.agg(
+              n_rows=(px_col, "size"),
+              n_nonnull=(px_col, lambda s: s.notna().sum()),
+              first_date=("date", "min"),
+              last_date=("date", "max"),
+          ).reset_index().rename(columns={ticker_col:"ticker"})
+
+          out["null_ratio"] = 1.0 - (out["n_nonnull"] / out["n_rows"]).replace([0], pd.NA)
+          out = out.sort_values(["null_ratio","last_date"], ascending=[False, True])
+
+          print("\n=== Price coverage since 2023-01-01 (worst first) ===")
+          with pd.option_context("display.max_rows", 200, "display.width", 180):
+            print(out.to_string(index=False))
+
+          out.to_csv("out_debug_price_coverage_since_2023.csv", index=False)
+          print("\nSaved out_debug_price_coverage_since_2023.csv")
+          PY
+
+      # 3) 세 라운드 전체기간 equity/weights 생성
+      - name: Export full-period equity & weights (round5/round7b/round8)
+        run: |
+          set -e
+          mkdir -p out_debug_full
+
+          for r in round5 round7b round8; do
+            echo "=== $r ==="
+            python scripts/export_best_equity.py \
+              --prices data/prices.csv \
+              --config config/universe.yml \
+              --best-params-json configs/best/${r}.json \
+              --out-dir out_debug_full/${r}
+          done
+
+      # 4) 2023~2025 평균 보유비중 체크 (BIL 비중 포함)
+      - name: Check average weights 2023-2025
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          import numpy as np
+          from pathlib import Path
+
+          def read_weights(dirpath: Path):
+              pq = dirpath / "weights.parquet"
+              csv = dirpath / "weights.csv"
+              if pq.exists():
+                  w = pd.read_parquet(pq)
+              elif csv.exists():
+                  w = pd.read_csv(csv)
+              else:
+                  raise FileNotFoundError(f"missing weights.parquet/csv in {dirpath}")
+
+              # expected: index date or a date column
+              if "date" in w.columns:
+                  w["date"] = pd.to_datetime(w["date"])
+                  w = w.set_index("date")
+              else:
+                  # try index already datetime
+                  w.index = pd.to_datetime(w.index)
+
+              w = w.sort_index()
+              return w
+
+          root = Path("out_debug_full")
+          rounds = ["round5","round7b","round8"]
+
+          rows = []
+          for r in rounds:
+              w = read_weights(root / r)
+
+              # slice
+              w2 = w[(w.index >= "2023-01-01") & (w.index <= "2025-12-31")].copy()
+              if len(w2) == 0:
+                  print(f"[{r}] no weights rows in 2023-2025")
+                  continue
+
+              # columns may be tickers; ensure numeric
+              for c in w2.columns:
+                  w2[c] = pd.to_numeric(w2[c], errors="coerce")
+
+              # average weights
+              avg = w2.mean(axis=0, skipna=True).sort_values(ascending=False)
+
+              # pick top 8 + BIL if exists
+              top = avg.head(8)
+
+              bil_w = float(avg.get("BIL", np.nan))
+              spy_w = float(avg.get("SPY", np.nan))
+              qqq_w = float(avg.get("QQQ", np.nan))
+              smh_w = float(avg.get("SMH", np.nan))
+
+              rows.append({
+                  "round": r,
+                  "n_days": int(len(w2)),
+                  "avg_BIL": bil_w,
+                  "avg_SPY": spy_w,
+                  "avg_QQQ": qqq_w,
+                  "avg_SMH": smh_w,
+                  "top8": "; ".join([f"{k}:{v:.3f}" for k,v in top.items()])
+              })
+
+              print(f"\n=== {r} avg weights 2023-2025 (top8) ===")
+              print(top.to_string())
+              print(f"BIL={bil_w:.3f} SPY={spy_w:.3f} QQQ={qqq_w:.3f} SMH={smh_w:.3f}")
+
+          out = pd.DataFrame(rows)
+          out.to_csv("out_debug_avg_weights_2023_2025.csv", index=False)
+          print("\nSaved out_debug_avg_weights_2023_2025.csv")
+          print("\n=== Summary ===")
+          print(out.to_string(index=False))
+          PY
+
+      # 5) 업로드
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-recent5y-cashlock-results
+          path: |
+            out_debug_price_coverage_since_2023.csv
+            out_debug_avg_weights_2023_2025.csv
+            out_debug_full/**/equity.csv
+            out_debug_full/**/weights.parquet
+            out_debug_full/**/weights.csv
+            data/prices.csv
+            config/universe.yml
+            configs/best/round5.json
+            configs/best/round7b.json
+            configs/best/round8.json
