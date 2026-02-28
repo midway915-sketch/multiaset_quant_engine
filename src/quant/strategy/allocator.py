@@ -53,7 +53,6 @@ def choose_top_assets(
     if dt >= pd.Timestamp("2023-01-01") and dt.day <= 7:
         n_pass = int(pass_abs.sum())
         n_riskadj = int(risk_adj_row[pass_abs].notna().sum())
-        print(dt, "pass_abs:", n_pass, "risk_adj non-null among pass_abs:", n_riskadj)
         if n_pass > 0:
             sample = (
                 risk_adj_row[pass_abs]
@@ -63,7 +62,7 @@ def choose_top_assets(
                 .head(5)
                 .to_dict()
             )
-            print("risk_adj sample:", sample)
+
 
     candidates = risk_adj_row[pass_abs].replace([np.inf, -np.inf], np.nan).dropna()
     candidates = candidates.sort_values(ascending=False)
