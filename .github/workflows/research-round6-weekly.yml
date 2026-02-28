@@ -1,0 +1,64 @@
+name: research-round6-weekly
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Download prices (Yahoo)
+        run: |
+          python scripts/download_prices.py \
+            --start 2000-01-01 \
+            --tickers-from-config config/universe.yml \
+            --out data/prices.csv
+
+      - name: Run Round6 weekly grid
+        run: |
+          python scripts/run_grid.py \
+            --prices data/prices.csv \
+            --config config/universe.yml \
+            --grid config/grid_round6_weekly_target.yml \
+            --out-dir out_grid_round6_weekly
+
+      - name: Convert wf_results parquet to csv (if exists)
+        run: |
+          python - << 'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          out_dir = Path("out_grid_round6_weekly")
+          pq = out_dir / "wf_results.parquet"
+          csv = out_dir / "wf_results.csv"
+
+          if pq.exists():
+              df = pd.read_parquet(pq)
+              df.to_csv(csv, index=False)
+              print(f"saved {csv} ({len(df):,} rows)")
+          else:
+              print("wf_results.parquet not found; skipping conversion")
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: round6-weekly-results
+          path: |
+            config/grid_round6_weekly_target.yml
+            out_grid_round6_weekly/param_summary.csv
+            out_grid_round6_weekly/best_params.json
+            out_grid_round6_weekly/wf_results.csv
+            out_grid_round6_weekly/wf_results.parquet
