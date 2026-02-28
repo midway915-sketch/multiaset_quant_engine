@@ -52,6 +52,22 @@ jobs:
               print("wf_results.parquet not found; skipping conversion")
           PY
 
+      - name: Export best full-period equity
+        run: |
+          python scripts/export_best_equity.py \
+            --prices data/prices.csv \
+            --config config/universe.yml \
+            --best-params-json out_grid_round9_weekly_hybrid/best_params.json \
+            --out-dir out_grid_round9_weekly_hybrid/best_full
+
+      - name: Build dashboard + true rolling 10y stats
+        run: |
+          python scripts/analyze_dashboard_plus.py \
+            --out-dir out_grid_round9_weekly_hybrid \
+            --best-full-dir out_grid_round9_weekly_hybrid/best_full \
+            --top-k 30 \
+            --rank-by median_calmar
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -63,3 +79,13 @@ jobs:
             out_grid_round9_weekly_hybrid/best_params.json
             out_grid_round9_weekly_hybrid/wf_results.csv
             out_grid_round9_weekly_hybrid/wf_results.parquet
+            out_grid_round9_weekly_hybrid/dashboard_summary.csv
+            out_grid_round9_weekly_hybrid/rolling10y.csv
+            out_grid_round9_weekly_hybrid/rolling10y_stats.json
+            out_grid_round9_weekly_hybrid/best_full/equity.csv
+            out_grid_round9_weekly_hybrid/best_full/weights.parquet
+            out_grid_round9_weekly_hybrid/best_full/trades.parquet
+            out_grid_round9_weekly_hybrid/best_full/signals.parquet
+            out_grid_round9_weekly_hybrid/best_full/weights.csv
+            out_grid_round9_weekly_hybrid/best_full/trades.csv
+            out_grid_round9_weekly_hybrid/best_full/signals.csv
