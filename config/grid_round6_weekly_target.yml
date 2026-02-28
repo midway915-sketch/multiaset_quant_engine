@@ -1,0 +1,34 @@
+# config/grid_round6_weekly_target.yml
+# Round6: weekly rebalancing (structure change A)
+
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 1
+
+grid:
+  # switch to weekly signals
+  rebalance.frequency: [weekly]
+  rebalance.when: [week_end]
+
+  # around Round3 best neighborhood
+  weights.w_1m: [0.25, 0.30, 0.35]
+  weights.w_6m: [0.25, 0.30, 0.35]
+  weights.w_12m: [0.25, 0.30, 0.35]
+
+  filters.regime_ma_days: [200, 250]
+
+  selection.top_n: [1]
+
+  leverage.thr_3x: [1.0, 1.1, 1.2]
+  leverage.thr_2x: [1.4, 1.5, 1.6]
+
+  leverage.use_trend_confirm: [true, false]
+
+ranking:
+  primary: median_calmar
+  constraints: {}
+  secondary:
+    - median_cagr
+    - worst_cagr
+    - mean_turnover
