@@ -37,7 +37,7 @@ def choose_top_assets(
     pass_abs = (abs_mom_row > abs_mom_min) & (prices_row > ma200_row)
     # NaN in comparisons should NOT silently nuke everything
     pass_abs = pass_abs.fillna(False)
-
+    print(dt, "pass_abs count:", int(pass_abs.sum()))
     # candidates: risk_adj among those passing absolute filters
     candidates = risk_adj_row[pass_abs].replace([np.inf, -np.inf], np.nan).dropna()
     candidates = candidates.sort_values(ascending=False)
