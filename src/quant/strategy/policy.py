@@ -41,15 +41,11 @@ def build_signals(
     feats = compute_features(prices, params)
 
     # ---------------------------------------------------------------------
-    # IMPORTANT: allocator.py expects feats["_ma200"] to exist (injected by policy).
-    # Our weekly changes introduced "_ma_slow" only, which caused KeyError.
-    # Fix: always inject _ma200 + also keep _ma_slow for future flexibility.
+    # Always inject _ma200 (allocator expects it) + also keep _ma_slow
     # ---------------------------------------------------------------------
     slow = int(params["filters"].get("trend_slow", 200))
     ma_slow_all = prices.rolling(slow).mean()
     feats["_ma_slow"] = ma_slow_all
-
-    # Always provide _ma200 for backward compatibility
     feats["_ma200"] = prices.rolling(200).mean()
 
     # regime filter on regime_ticker
@@ -63,21 +59,23 @@ def build_signals(
         if dt not in prices.index:
             continue
 
-        # signal computed at dt; applied from next trading day
         apply_dt = next_trading_day(dates, dt)
 
+        # -----------------------------
+        # Risk OFF: defensive rotation (top 1, 1x fixed)
+        # -----------------------------
         if not bool(regime_on.loc[dt]):
-            pr = prices.loc[dt]
-        
-            # --- Risk Off defensive universe ---
+            # defensive kinds (expanded)
+            defensive_kinds = {"bond", "alt", "fx", "alt_trend", "multi_asset"}
+
             defensive_assets = [
                 a for a, k in universe_kind_map.items()
-                if k in ["bond", "alt", "fx"]
+                if k in defensive_kinds
             ]
-        
-            # remove cash proxy from ranking pool
+
+            # never rank cash_proxy; only fallback
             defensive_assets = [a for a in defensive_assets if a != cash_proxy]
-        
+
             if len(defensive_assets) == 0:
                 rows.append({
                     "signal_date": dt,
@@ -88,14 +86,12 @@ def build_signals(
                     "gears": {cash_proxy: "1x"},
                 })
                 continue
-        
-            # rank by risk_adj score
-            risk_adj_row = feats["risk_adj"].loc[dt]
-            risk_adj_row = risk_adj_row.reindex(defensive_assets)
-        
+
+            # rank by risk_adj (already computed)
+            risk_adj_row = feats["risk_adj"].loc[dt].reindex(defensive_assets)
             candidates = risk_adj_row.replace([float("inf"), float("-inf")], pd.NA).dropna()
             candidates = candidates.sort_values(ascending=False)
-        
+
             if len(candidates) == 0:
                 rows.append({
                     "signal_date": dt,
@@ -106,23 +102,23 @@ def build_signals(
                     "gears": {cash_proxy: "1x"},
                 })
                 continue
-        
-            chosen = [candidates.index[0]]
-        
+
+            chosen = [str(candidates.index[0])]
             rows.append({
                 "signal_date": dt,
                 "apply_date": apply_dt,
                 "risk_on": False,
                 "assets": chosen,
                 "weights": {chosen[0]: 1.0},
-                "gears": {chosen[0]: "1x"},   # defensive always 1x
+                "gears": {chosen[0]: "1x"},
             })
             continue
 
+        # -----------------------------
+        # Risk ON: choose top risky assets + leverage logic
+        # -----------------------------
         pr = prices.loc[dt]
-
-        # choose assets + weights
-        chosen, wts = choose_top_assets(dt, pr, feats, universe_kind_map, {}, params)
+        chosen, wts = choose_top_assets(dt, pr, feats, universe_kind_map, {"cash_proxy": cash_proxy, "regime_ticker": regime_ticker}, params)
 
         if len(chosen) == 0:
             rows.append({
@@ -135,7 +131,6 @@ def build_signals(
             })
             continue
 
-        # pick leverage gear for each chosen asset
         gears = {}
         for a in chosen:
             gears[a] = pick_gear_for_asset(
@@ -167,5 +162,4 @@ def build_monthly_signals(
     cash_proxy: str,
     params: Dict,
 ) -> pd.DataFrame:
-    # Backward compatible wrapper (legacy name)
     return build_signals(prices, universe_kind_map, regime_ticker, cash_proxy, params)
