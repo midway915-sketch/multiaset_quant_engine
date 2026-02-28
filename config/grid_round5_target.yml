@@ -1,0 +1,37 @@
+# config/grid_round5_target.yml
+# Round5: Targeted micro-search around Round3 best
+# Goal: see if median CAGR can move from ~23% toward 24~25% without changing the whole strategy.
+
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 1
+
+grid:
+  # Focus on the "balanced" momentum neighborhood that produced Round3 best
+  # Keep it tight to avoid combinatorial explosion.
+  weights.w_1m: [0.25, 0.30, 0.35]
+  weights.w_6m: [0.25, 0.30, 0.35]
+  weights.w_12m: [0.25, 0.30, 0.35]
+
+  # Round3 best was 250; probe nearby but not too wide
+  filters.regime_ma_days: [200, 250]
+
+  # Round3 best was concentration
+  selection.top_n: [1]
+
+  # Probe leverage gates near Round3 best (thr_3x=1.1, thr_2x=1.5)
+  leverage.thr_3x: [1.0, 1.1, 1.2]
+  leverage.thr_2x: [1.4, 1.5, 1.6]
+
+  # Round3 best used trend confirm = true; still test false to see if it lifts CAGR
+  leverage.use_trend_confirm: [true, false]
+
+ranking:
+  # We still care about stability; primary by calmar, but we want higher CAGR too
+  primary: median_calmar
+  constraints: {}
+  secondary:
+    - median_cagr
+    - worst_cagr
+    - mean_turnover
