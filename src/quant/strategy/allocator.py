@@ -17,14 +17,29 @@ def choose_top_assets(
     top_n = params["selection"]["top_n"]
     abs_mom_min = params["filters"]["abs_mom_min"]
 
+    # --- robust alignment ---
+    # ensure all feature rows align to prices universe
     risk_adj_row = feats["risk_adj"].loc[dt]
     abs_mom_row = feats["abs_mom"].loc[dt]
 
-    # absolute filters per asset
-    ma200 = feats["_ma200"].loc[dt]  # injected by policy
-    pass_abs = (abs_mom_row > abs_mom_min) & (prices_row > ma200)
+    risk_adj_row = risk_adj_row.reindex(prices_row.index)
+    abs_mom_row = abs_mom_row.reindex(prices_row.index)
 
-    candidates = risk_adj_row[pass_abs].dropna()
+    # MA200 (per-asset) injected by policy
+    ma200_row = feats["_ma200"].loc[dt]
+    if isinstance(ma200_row, pd.Series):
+        ma200_row = ma200_row.reindex(prices_row.index)
+    else:
+        # very defensive fallback
+        ma200_row = pd.Series(index=prices_row.index, data=np.nan)
+
+    # absolute filters per asset
+    pass_abs = (abs_mom_row > abs_mom_min) & (prices_row > ma200_row)
+    # NaN in comparisons should NOT silently nuke everything
+    pass_abs = pass_abs.fillna(False)
+
+    # candidates: risk_adj among those passing absolute filters
+    candidates = risk_adj_row[pass_abs].replace([np.inf, -np.inf], np.nan).dropna()
     candidates = candidates.sort_values(ascending=False)
 
     chosen = candidates.index[:top_n].tolist()
@@ -84,8 +99,6 @@ def pick_gear_for_asset(
 
     # ---------------------------------------------------------
     # NEW: Hybrid Bull-3x mode
-    # - In calm regime (market vol <= threshold), force 3x on selected assets
-    # - Otherwise fall back to vol-target (if enabled) or ratio mode
     # ---------------------------------------------------------
     if lev.get("use_hybrid_bull_3x", False):
         bull_ticker = str(lev.get("bull_vol_ticker", "SPY"))
