@@ -2,23 +2,28 @@ weights:
   w_1m: 0.2
   w_6m: 0.4
   w_12m: 0.4
+
 rebalance:
   frequency: monthly
   when: month_end
   entry: next_close
+
 filters:
   abs_mom_days: 252
   abs_mom_min: 0.0
   regime_ma_days: 200
   trend_fast: 50
   trend_slow: 200
+
 volatility:
   vol_window: 20
   vol_ref_window: 252
   risk_window: 63
+
 selection:
   top_n: 2
   weighting: equal
+
 leverage:
   enabled: true
   thr_3x: 1.0
@@ -26,13 +31,22 @@ leverage:
   equity_only: true
   use_trend_confirm: true
 
-  # NEW: vol targeting (discrete gear selection)
+  # Vol targeting (discrete gear selection)
   use_vol_target: false
   vol_target_annual: 0.30
   vol_lookback_days: 63
   max_leverage: 3.0
   gear_cut_2x: 1.5
   gear_cut_3x: 2.5
+
+  # NEW: Hybrid bull 3x
+  use_hybrid_bull_3x: false
+  bull_vol_ticker: SPY
+  bull_vol_lookback_days: 21
+  bull_vol_max_annual: 0.25
+  # Only force 3x on tickers that actually have 3x mappings in universe.yml
+  force_3x_assets: [QQQ, SMH]
+
 costs:
   buy: 0.0007
   sell: 0.0007
