@@ -1,0 +1,96 @@
+name: annual-returns-full
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      # 1️⃣ 전체 기간 가격 다운로드
+      - name: Download prices (2000~)
+        run: |
+          python scripts/download_prices.py \
+            --start 2000-01-01 \
+            --tickers-from-config config/universe.yml \
+            --out data/prices.csv
+
+      # 2️⃣ 각 best_params로 전체기간 equity 생성
+      - name: Export full-period equity
+        run: |
+          set -e
+          mkdir -p out_annual_full
+
+          for r in round5 round7b round8; do
+            echo "=== $r ==="
+            python scripts/export_best_equity.py \
+              --prices data/prices.csv \
+              --config config/universe.yml \
+              --best-params-json configs/best/${r}.json \
+              --out-dir out_annual_full/${r}
+          done
+
+      # 3️⃣ 연도별 수익률 계산
+      - name: Compute annual returns (full period)
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          def read_eq(path):
+              df = pd.read_csv(path)
+              df["date"] = pd.to_datetime(df["date"])
+              df = df.sort_values("date")
+              s = pd.Series(df["equity"].astype(float).values, index=df["date"])
+              s = s[~s.index.duplicated(keep="last")]
+              return s.dropna()
+
+          def annual_ret(eq):
+              ye = eq.resample("YE").last()
+              ret = ye / ye.shift(1) - 1.0
+              ret = ret.dropna()
+              ret.index = ret.index.year
+              return ret
+
+          root = Path("out_annual_full")
+          rounds = ["round5","round7b","round8"]
+
+          cols = []
+          for r in rounds:
+              eq = read_eq(root / r / "equity.csv")
+              ar = annual_ret(eq).rename(r)
+              cols.append(ar)
+
+          out = pd.concat(cols, axis=1).sort_index()
+          out.to_csv(root / "annual_returns_full.csv", float_format="%.6f")
+
+          print("\n=== Annual Returns (%) ===")
+          print((out * 100).round(2).to_string())
+          PY
+
+      # 4️⃣ 아티팩트 업로드
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: annual-returns-full-results
+          path: |
+            out_annual_full/**/equity.csv
+            out_annual_full/annual_returns_full.csv
+            data/prices.csv
+            config/universe.yml
+            configs/best/round5.json
+            configs/best/round7b.json
+            configs/best/round8.json
