@@ -25,6 +25,14 @@ leverage:
   thr_2x: 1.2
   equity_only: true
   use_trend_confirm: true
+
+  # NEW: vol targeting (discrete gear selection)
+  use_vol_target: false
+  vol_target_annual: 0.30
+  vol_lookback_days: 63
+  max_leverage: 3.0
+  gear_cut_2x: 1.5
+  gear_cut_3x: 2.5
 costs:
   buy: 0.0007
   sell: 0.0007
