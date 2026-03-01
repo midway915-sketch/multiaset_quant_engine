@@ -1,0 +1,42 @@
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 2
+
+grid:
+  # Rebalance (유지)
+  rebalance.frequency: ["weekly"]
+  rebalance.when: ["week_end"]
+  rebalance.entry: ["next_close"]
+
+  # --- 24.4 봉우리 고정 ---
+  selection.top_n: [2]
+  selection.weighting: ["equal"]
+
+  filters.abs_mom_min: [0.03]
+
+  weights.w_1m: [0.25]
+  weights.w_6m: [0.40]
+  weights.w_12m: [0.35]
+
+  leverage.enabled: [true]
+  leverage.equity_only: [true]
+  leverage.use_trend_confirm: [true]
+  leverage.use_hybrid_bull_3x: [false]
+
+  leverage.use_vol_target: [true]
+  leverage.vol_lookback_days: [63]
+  leverage.max_leverage: [3.0]
+  leverage.gear_cut_2x: [1.5]
+
+  costs.buy: [0.0007]
+  costs.sell: [0.0007]
+
+  # --- 여기부터 "CAGR 뚫기" 스캔 (36 combos) ---
+  filters.regime_ma_days: [140, 150, 160, 170]
+  leverage.vol_target_annual: [0.60, 0.65, 0.70]
+  leverage.gear_cut_3x: [2.1, 2.3, 2.5]
+
+  # (선택) 히스테리시스는 일단 끄고 간다: 레버/레짐 효과만 보기
+  selection.hysteresis.enabled: [false]
+  selection.hysteresis.min_improve: [0.0]
