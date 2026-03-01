@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -57,8 +58,8 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True, help="e.g. data/prices.csv")
     ap.add_argument("--config", required=True, help="Universe yml (e.g. config/universe_round10.yml)")
-    ap.add_argument("--grid", required=True, help="Grid yml (e.g. config/grid_hysteresis_push.yml)")
-    ap.add_argument("--out-dir", required=True, help="e.g. out/grid_hysteresis_push")
+    ap.add_argument("--grid", required=True, help="Grid yml (e.g. config/grid_cagr_breakout.yml)")
+    ap.add_argument("--out-dir", required=True, help="e.g. out/grid_cagr_breakout")
     ap.add_argument(
         "--portfolio-config",
         required=False,
@@ -75,6 +76,18 @@ def _get_nested(d: Dict[str, Any], path: str, default=None):
             return default
         cur = cur[p]
     return cur
+
+
+def _fmt_secs(s: float) -> str:
+    s = max(0.0, float(s))
+    h = int(s // 3600)
+    m = int((s % 3600) // 60)
+    sec = int(s % 60)
+    if h > 0:
+        return f"{h:d}h{m:02d}m{sec:02d}s"
+    if m > 0:
+        return f"{m:d}m{sec:02d}s"
+    return f"{sec:d}s"
 
 
 def main():
@@ -99,14 +112,14 @@ def main():
         "base_params_exists": base_params_path.exists(),
     }
 
-    print("[DEBUG] cwd:", debug["cwd"])
-    print("[DEBUG] script_path:", debug["script_path"])
-    print("[DEBUG] repo_root_guess:", debug["repo_root_guess"])
-    print("[DEBUG] base_params_path_guess:", debug["base_params_path_guess"], "exists:", debug["base_params_exists"])
-    print("[DEBUG] universe_config_arg:", args.config)
-    print("[DEBUG] grid_config_arg:", args.grid)
+    print("[DEBUG] cwd:", debug["cwd"], flush=True)
+    print("[DEBUG] script_path:", debug["script_path"], flush=True)
+    print("[DEBUG] repo_root_guess:", debug["repo_root_guess"], flush=True)
+    print("[DEBUG] base_params_path_guess:", debug["base_params_path_guess"], "exists:", debug["base_params_exists"], flush=True)
+    print("[DEBUG] universe_config_arg:", args.config, flush=True)
+    print("[DEBUG] grid_config_arg:", args.grid, flush=True)
     if args.portfolio_config:
-        print("[DEBUG] portfolio_config_arg:", args.portfolio_config)
+        print("[DEBUG] portfolio_config_arg:", args.portfolio_config, flush=True)
 
     # Universe
     uni = load_universe(args.config)
@@ -129,11 +142,11 @@ def main():
     debug["grid_selection_hysteresis_enabled_values"] = grid.get("selection.hysteresis.enabled", None)
     debug["grid_selection_hysteresis_min_improve_values"] = grid.get("selection.hysteresis.min_improve", None)
 
-    print("[DEBUG] base_params selection.hysteresis exists?:", debug["base_params_selection_has_hysteresis"])
-    print("[DEBUG] grid has selection.hysteresis.enabled?:", debug["grid_has_selection_hysteresis_enabled"])
-    print("[DEBUG] grid has selection.hysteresis.min_improve?:", debug["grid_has_selection_hysteresis_min_improve"])
-    print("[DEBUG] grid selection.hysteresis.enabled values:", debug["grid_selection_hysteresis_enabled_values"])
-    print("[DEBUG] grid selection.hysteresis.min_improve values:", debug["grid_selection_hysteresis_min_improve_values"])
+    print("[DEBUG] base_params selection.hysteresis exists?:", debug["base_params_selection_has_hysteresis"], flush=True)
+    print("[DEBUG] grid has selection.hysteresis.enabled?:", debug["grid_has_selection_hysteresis_enabled"], flush=True)
+    print("[DEBUG] grid has selection.hysteresis.min_improve?:", debug["grid_has_selection_hysteresis_min_improve"], flush=True)
+    print("[DEBUG] grid selection.hysteresis.enabled values:", debug["grid_selection_hysteresis_enabled_values"], flush=True)
+    print("[DEBUG] grid selection.hysteresis.min_improve values:", debug["grid_selection_hysteresis_min_improve_values"], flush=True)
 
     # Optional portfolio override (only selection.*)
     portfolio_cfg: Optional[Dict[str, Any]] = None
@@ -163,7 +176,7 @@ def main():
     param_sets = make_param_sets(base_params, grid)
     debug["param_sets_count"] = len(param_sets)
 
-    # --- verify hysteresis landed in param_sets ---
+    # verify hysteresis landed in param_sets
     enabled_vals = set()
     min_improve_vals = set()
     for p in param_sets:
@@ -177,17 +190,28 @@ def main():
     debug["param_sets_hysteresis_enabled_unique"] = sorted(list(enabled_vals))
     debug["param_sets_hysteresis_min_improve_unique"] = sorted(list(min_improve_vals))
 
-    print("[DEBUG] param_sets_count:", debug["param_sets_count"])
-    print("[DEBUG] param_sets hysteresis.enabled unique:", debug["param_sets_hysteresis_enabled_unique"])
-    print("[DEBUG] param_sets hysteresis.min_improve unique:", debug["param_sets_hysteresis_min_improve_unique"])
+    print("[DEBUG] param_sets_count:", debug["param_sets_count"], flush=True)
+    print("[DEBUG] param_sets hysteresis.enabled unique:", debug["param_sets_hysteresis_enabled_unique"], flush=True)
+    print("[DEBUG] param_sets hysteresis.min_improve unique:", debug["param_sets_hysteresis_min_improve_unique"], flush=True)
 
     # save debug json
     (outp / "debug_paths.json").write_text(json.dumps(debug, indent=2), encoding="utf-8")
+
+    # ----------------------------
+    # Progress / ETA (NEW)
+    # ----------------------------
+    total_tasks = len(windows) * len(param_sets)
+    task_i = 0
+    t0 = time.time()
+    last_print = t0
+
+    print(f"[PROGRESS] windows={len(windows)} params={len(param_sets)} total={total_tasks}", flush=True)
 
     wf_rows = []
     for w_i, w in enumerate(windows):
         prices_window = prices_full.loc[(prices_full.index >= w.train_start) & (prices_full.index <= w.test_end)]
         if len(prices_window) < 50:
+            # still advance the counter for skipped window? no; tasks are per (window,param) so skip all of them
             continue
 
         rp_window = ReturnProvider(
@@ -197,7 +221,23 @@ def main():
             leverage_maps=uni.leverage_maps(),
         )
 
-        for p in param_sets:
+        for p_i, p in enumerate(param_sets):
+            task_i += 1
+
+            # periodic progress printing (every ~30s or first/last)
+            now = time.time()
+            if task_i == 1 or task_i == total_tasks or (now - last_print) >= 30.0:
+                elapsed = now - t0
+                rate = task_i / elapsed if elapsed > 0 else 0.0
+                remaining = (total_tasks - task_i) / rate if rate > 0 else 0.0
+                print(
+                    f"[PROGRESS] {task_i}/{total_tasks} "
+                    f"(win {w_i+1}/{len(windows)}, param {p_i+1}/{len(param_sets)}) "
+                    f"elapsed={_fmt_secs(elapsed)} eta={_fmt_secs(remaining)}",
+                    flush=True,
+                )
+                last_print = now
+
             params = p
             if portfolio_cfg:
                 params = json.loads(json.dumps(p))  # deep copy
@@ -263,8 +303,10 @@ def main():
     equity, daily_weights, trades = run_backtest(prices_full, signals, rp_full, best_params["costs"])
     generate_report(str(outp), equity, daily_weights, trades)
 
-    print(f"Best param_id: {best_pid}")
-    print("Done.")
+    elapsed_total = time.time() - t0
+    print(f"[PROGRESS] done. total_elapsed={_fmt_secs(elapsed_total)}", flush=True)
+    print(f"Best param_id: {best_pid}", flush=True)
+    print("Done.", flush=True)
 
 
 if __name__ == "__main__":
