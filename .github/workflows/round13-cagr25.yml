@@ -1,0 +1,65 @@
+name: round13-cagr25
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_config:
+        description: "Universe config yml"
+        required: true
+        default: "config/universe.yml"
+      grid_config:
+        description: "Grid config yml"
+        required: true
+        default: "config/grid_round13_cagr25_ultra.yml"
+      prices_start:
+        description: "Price download start date"
+        required: true
+        default: "2000-01-01"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Download prices (Yahoo)
+        run: |
+          mkdir -p data
+          python scripts/download_prices.py \
+            --start "${{ inputs.prices_start }}" \
+            --tickers-from-config "${{ inputs.universe_config }}" \
+            --out data/prices.csv
+
+      - name: Run grid (round13 cagr25)
+        run: |
+          set -e
+          mkdir -p out/round13_cagr25
+          python scripts/run_grid.py \
+            --prices data/prices.csv \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --out-dir out/round13_cagr25
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: round13-cagr25-results
+          path: |
+            out/round13_cagr25/wf_results.parquet
+            out/round13_cagr25/wf_results.csv
+            out/round13_cagr25/param_summary.csv
+            out/round13_cagr25/best_params.json
+            data/prices.csv
+            ${{ inputs.universe_config }}
+            ${{ inputs.grid_config }}
