@@ -1,0 +1,9 @@
+selection:
+  top_n: 2
+  weighting: conditional_rank_weights
+  rank_weights: [0.50, 0.50]
+
+  # score gap이 작을 때만 top2로, 크면 top1처럼 운용
+  # (gap = rank1_score - rank2_score)
+  score_gap_threshold: 0.0
+  fallback_top_n: 1
