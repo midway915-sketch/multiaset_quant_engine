@@ -6,6 +6,18 @@ import pandas as pd
 from quant.features.trend import sma
 
 
+def _safe_weights_from_rank_weights(rank_weights: List[float], n: int) -> List[float]:
+    w = list(rank_weights or [])
+    if len(w) < n:
+        # pad remaining equally
+        w = w + [1.0] * (n - len(w))
+    w = w[:n]
+    s = float(np.sum(w))
+    if not np.isfinite(s) or s <= 0:
+        return [1.0 / n] * n
+    return [float(x) / s for x in w]
+
+
 def choose_top_assets(
     dt: pd.Timestamp,
     prices_row: pd.Series,
@@ -18,12 +30,13 @@ def choose_top_assets(
     """
     Choose top assets under absolute filters and return:
 
-      - chosen: list of assets to actually hold (size = params['selection']['top_n'])
+      - chosen: list of assets to actually hold (size may be < top_n if conditional mode falls back)
       - weights: dict of weights for chosen assets
       - ranked_top: list of (ticker, score) for the top_k candidates (for logging),
                     where score is feats['risk_adj'] for that dt.
     """
-    top_n = int(params["selection"]["top_n"])
+    sel = params.get("selection", {}) or {}
+    top_n = int(sel.get("top_n", 2))
     abs_mom_min = float(params["filters"]["abs_mom_min"])
 
     risk_adj_row = feats["risk_adj"].loc[dt]
@@ -59,6 +72,41 @@ def choose_top_assets(
         return [], {}, ranked_top
     if len(chosen) == 1:
         return chosen, {chosen[0]: 1.0}, ranked_top
+
+    weighting = str(sel.get("weighting", "equal")).lower()
+
+    # 1) equal
+    if weighting == "equal":
+        w = 1.0 / len(chosen)
+        return chosen, {t: w for t in chosen}, ranked_top
+
+    # 2) fixed rank weights (e.g., [0.7, 0.3])
+    if weighting == "rank_weights":
+        rw = sel.get("rank_weights", [0.5, 0.5])
+        wv = _safe_weights_from_rank_weights(rw, len(chosen))
+        return chosen, {t: float(wv[i]) for i, t in enumerate(chosen)}, ranked_top
+
+    # 3) conditional: if (score1 - score2) > threshold => fallback_top_n (usually 1)
+    if weighting == "conditional_rank_weights":
+        threshold = float(sel.get("score_gap_threshold", 0.0))
+        fallback_top_n = int(sel.get("fallback_top_n", 1))
+        rw = sel.get("rank_weights", [0.5, 0.5])
+
+        if len(chosen) >= 2:
+            s1 = float(candidates.iloc[0])
+            s2 = float(candidates.iloc[1])
+            gap = s1 - s2
+            if np.isfinite(gap) and gap > threshold:
+                fb = candidates.index[:max(1, fallback_top_n)].tolist()
+                if len(fb) == 1:
+                    return fb, {fb[0]: 1.0}, ranked_top
+                wfb = 1.0 / len(fb)
+                return fb, {t: wfb for t in fb}, ranked_top
+
+        wv = _safe_weights_from_rank_weights(rw, len(chosen))
+        return chosen, {t: float(wv[i]) for i, t in enumerate(chosen)}, ranked_top
+
+    # Unknown mode -> safe fallback
     w = 1.0 / len(chosen)
     return chosen, {t: w for t in chosen}, ranked_top
 
