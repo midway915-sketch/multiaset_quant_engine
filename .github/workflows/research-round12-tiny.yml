@@ -1,0 +1,45 @@
+name: research-round12-tiny
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-grid:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: |
+          pip install --upgrade pip
+          pip install .
+          pip install pyarrow pandas pyyaml
+
+      - run: |
+          mkdir -p data
+          python scripts/download_prices.py \
+            --start "2000-01-01" \
+            --out "data/prices.csv" \
+            --tickers-from-config "config/universe_round12_expanded.yml"
+
+      - run: |
+          python scripts/run_grid.py \
+            --prices "data/prices.csv" \
+            --config "config/universe_round12_expanded.yml" \
+            --grid "config/grid_round12_tiny.yml" \
+            --out-dir "_out/round12_tiny"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: round12_tiny_outputs
+          path: |
+            data/prices.csv
+            _out/round12_tiny/param_summary.csv
+            _out/round12_tiny/best_params.json
+            _out/round12_tiny/wf_results.csv
+            _out/round12_tiny/equity.csv
