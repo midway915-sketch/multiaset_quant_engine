@@ -23,6 +23,9 @@ volatility:
 selection:
   top_n: 2
   weighting: equal
+  hysteresis:
+    enabled: false
+    min_improve: 0.0
 
 leverage:
   enabled: true
