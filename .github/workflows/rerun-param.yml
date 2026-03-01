@@ -1,0 +1,82 @@
+name: rerun-param
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_config:
+        description: "Universe config yml"
+        required: true
+        default: "config/universe_round10.yml"
+      grid_config:
+        description: "Grid config yml (must match the run that produced the param_id)"
+        required: true
+        default: "config/grid_cagr25_fast.yml"
+      param_id:
+        description: "param_id to rerun"
+        required: true
+        default: "a74bf54c38"
+      prices_start:
+        description: "Price download start date (keep same as your usual)"
+        required: true
+        default: "2000-01-01"
+      out_dir:
+        description: "Output directory"
+        required: true
+        default: "out/rerun_param"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Download prices
+        run: |
+          set -e
+          mkdir -p data
+          python scripts/download_prices.py \
+            --start "${{ inputs.prices_start }}" \
+            --tickers-from-config "${{ inputs.universe_config }}" \
+            --out data/prices.csv
+
+      - name: Rerun single param_id (full backtest + picks)
+        run: |
+          set -e
+          mkdir -p "${{ inputs.out_dir }}"
+          python scripts/rerun_param_id.py \
+            --prices data/prices.csv \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --param-id "${{ inputs.param_id }}" \
+            --out-dir "${{ inputs.out_dir }}/${{ inputs.param_id }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rerun-param-results
+          if-no-files-found: error
+          path: |
+            data/prices.csv
+            ${{ inputs.universe_config }}
+            ${{ inputs.grid_config }}
+            ${{ inputs.out_dir }}/${{ inputs.param_id }}/best_params.json
+            ${{ inputs.out_dir }}/${{ inputs.param_id }}/metrics_pretty.json
+            ${{ inputs.out_dir }}/${{ inputs.param_id }}/rebalance_log.csv
+            ${{ inputs.out_dir }}/${{ inputs.param_id }}/picks_top2_weekly.csv
+            ${{ inputs.out_dir }}/${{ inputs.param_id }}/yearly_returns.csv
+            ${{ inputs.out_dir }}/${{ inputs.param_id }}/rerun_param_id.txt
