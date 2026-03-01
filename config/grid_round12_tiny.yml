@@ -1,0 +1,54 @@
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 2
+
+grid:
+  # -----------------------
+  # Rebalance
+  # -----------------------
+  rebalance.frequency: ["weekly"]
+  rebalance.when: ["week_end"]
+
+  # -----------------------
+  # Regime (빠르게)
+  # -----------------------
+  filters.regime_ma_days: [80, 100, 125]
+
+  # -----------------------
+  # Selection
+  # -----------------------
+  selection.top_n: [1]
+
+  filters.abs_mom_min: [0.00, 0.01]
+
+  weights.w_1m:  [0.40, 0.50]
+  weights.w_6m:  [0.30]
+  weights.w_12m: [0.30]
+
+  # -----------------------
+  # Leverage (핵심)
+  # -----------------------
+  leverage.enabled: [true]
+  leverage.equity_only: [true]
+  leverage.use_trend_confirm: [false]
+
+  # Vol-target을 2x/3x 자연분배용으로 사용
+  leverage.use_vol_target: [true]
+  leverage.vol_target_annual: [0.45, 0.55]
+  leverage.vol_lookback_days: [21]
+  leverage.max_leverage: [3.0]
+
+  # 2x/3x 컷
+  leverage.gear_cut_2x: [1.3, 1.5]
+  leverage.gear_cut_3x: [2.2, 2.5]
+
+  # Hybrid bull 3x (너무 과격하지 않게)
+  leverage.use_hybrid_bull_3x: [true]
+  leverage.bull_vol_ticker: ["SPY"]
+  leverage.bull_vol_lookback_days: [21]
+  leverage.bull_vol_max_annual: [0.28, 0.32]
+
+  # Costs
+  costs.buy: [0.0007]
+  costs.sell: [0.0007]
