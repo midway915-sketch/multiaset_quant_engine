@@ -1,0 +1,118 @@
+regime_ticker: SPY
+cash_proxy: BIL
+
+assets:
+  # -------------------
+  # Core Index
+  # -------------------
+  - ticker: SPY
+    kind: equity
+    lev2: SSO
+    lev3: UPRO
+
+  - ticker: QQQ
+    kind: equity
+    lev2: QLD
+    lev3: TQQQ
+
+  - ticker: IWM
+    kind: equity
+    lev2: UWM
+    lev3: TNA
+
+  - ticker: DIA
+    kind: equity
+    lev2: DDM
+    lev3: UDOW
+
+  - ticker: MDY
+    kind: equity
+    lev2: MVV
+    lev3: MIDU
+
+  # -------------------
+  # Tech / Growth
+  # -------------------
+  - ticker: XLK
+    kind: equity
+    lev2: ROM
+    lev3: TECL
+
+  - ticker: SMH
+    kind: equity
+    lev3: SOXL
+
+  # -------------------
+  # Cyclical Sectors
+  # -------------------
+  - ticker: XLF
+    kind: equity
+    lev2: UYG
+    lev3: FAS
+
+  - ticker: KRE
+    kind: equity
+    lev3: DPST
+
+  - ticker: XLI
+    kind: equity
+    lev2: UXI
+    lev3: DUSL
+
+  - ticker: XLY
+    kind: equity
+    lev2: UCC
+    lev3: WANT
+
+  - ticker: XLE
+    kind: equity
+    lev3: ERX
+
+  # -------------------
+  # Defensive / Thematic
+  # -------------------
+  - ticker: XLV
+    kind: equity
+    lev2: RXL
+    lev3: CURE
+
+  - ticker: XBI
+    kind: equity
+    lev3: LABU
+
+  - ticker: XLU
+    kind: equity
+    lev2: UPW
+    lev3: UTSL
+
+  - ticker: ITA
+    kind: equity
+    lev3: DFEN
+
+  - ticker: IYR
+    kind: equity
+    lev2: URE
+    lev3: DRN
+
+  # -------------------
+  # Alternatives / Defensive
+  # -------------------
+  - ticker: GLD
+    kind: alt
+
+  - ticker: IEF
+    kind: bond
+
+  - ticker: TLT
+    kind: bond
+
+  - ticker: UUP
+    kind: fx
+
+  - ticker: BIL
+    kind: cash
+
+annual_fees:
+  1x: 0.0
+  2x: 0.0095
+  3x: 0.0095
