@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict
+from typing import Dict, Optional, Tuple
 import pandas as pd
 import yaml
 
@@ -12,6 +12,20 @@ def load_params(path: str) -> Dict:
     return yaml.safe_load(open(path, "r", encoding="utf-8"))
 
 
+def _top2_from_candidates(candidates: pd.Series) -> Tuple[Optional[str], Optional[float], Optional[str], Optional[float]]:
+    if candidates is None or len(candidates) == 0:
+        return None, None, None, None
+    c = candidates.replace([float("inf"), float("-inf")], pd.NA).dropna().sort_values(ascending=False)
+    if len(c) == 0:
+        return None, None, None, None
+    t1 = str(c.index[0]); s1 = float(c.iloc[0])
+    if len(c) >= 2:
+        t2 = str(c.index[1]); s2 = float(c.iloc[1])
+    else:
+        t2 = None; s2 = None
+    return t1, s1, t2, s2
+
+
 def build_signals(
     prices: pd.DataFrame,
     universe_kind_map: Dict[str, str],
@@ -20,10 +34,9 @@ def build_signals(
     params: Dict,
 ) -> pd.DataFrame:
     """
-    Build rebalance signals (monthly/weekly) based on params['rebalance'].
-
     Output columns:
-      signal_date, apply_date, risk_on, assets, weights, gears
+      signal_date, apply_date, risk_on, assets, weights, gears,
+      rank1_ticker, rank1_score, rank2_ticker, rank2_score
     """
     dates = prices.index
 
@@ -37,18 +50,12 @@ def build_signals(
     else:
         rebal_dates = month_end_dates(dates)
 
-    # Compute features (momentum, vol, etc.)
     feats = compute_features(prices, params)
 
-    # ---------------------------------------------------------------------
-    # Always inject _ma200 (allocator expects it) + also keep _ma_slow
-    # ---------------------------------------------------------------------
     slow = int(params["filters"].get("trend_slow", 200))
-    ma_slow_all = prices.rolling(slow).mean()
-    feats["_ma_slow"] = ma_slow_all
+    feats["_ma_slow"] = prices.rolling(slow).mean()
     feats["_ma200"] = prices.rolling(200).mean()
 
-    # regime filter on regime_ticker
     regime_ma_days = int(params["filters"]["regime_ma_days"])
     reg = prices[regime_ticker]
     reg_ma = reg.rolling(regime_ma_days).mean()
@@ -61,19 +68,10 @@ def build_signals(
 
         apply_dt = next_trading_day(dates, dt)
 
-        # -----------------------------
-        # Risk OFF: defensive rotation (top 1, 1x fixed)
-        # -----------------------------
+        # Risk OFF
         if not bool(regime_on.loc[dt]):
-            # defensive kinds (expanded)
             defensive_kinds = {"bond", "alt", "fx", "alt_trend", "multi_asset"}
-
-            defensive_assets = [
-                a for a, k in universe_kind_map.items()
-                if k in defensive_kinds
-            ]
-
-            # never rank cash_proxy; only fallback
+            defensive_assets = [a for a, k in universe_kind_map.items() if k in defensive_kinds]
             defensive_assets = [a for a in defensive_assets if a != cash_proxy]
 
             if len(defensive_assets) == 0:
@@ -84,13 +82,16 @@ def build_signals(
                     "assets": [cash_proxy],
                     "weights": {cash_proxy: 1.0},
                     "gears": {cash_proxy: "1x"},
+                    "rank1_ticker": cash_proxy,
+                    "rank1_score": None,
+                    "rank2_ticker": None,
+                    "rank2_score": None,
                 })
                 continue
 
-            # rank by risk_adj (already computed)
             risk_adj_row = feats["risk_adj"].loc[dt].reindex(defensive_assets)
-            candidates = risk_adj_row.replace([float("inf"), float("-inf")], pd.NA).dropna()
-            candidates = candidates.sort_values(ascending=False)
+            candidates = risk_adj_row.replace([float("inf"), float("-inf")], pd.NA).dropna().sort_values(ascending=False)
+            r1_t, r1_s, r2_t, r2_s = _top2_from_candidates(candidates)
 
             if len(candidates) == 0:
                 rows.append({
@@ -100,6 +101,10 @@ def build_signals(
                     "assets": [cash_proxy],
                     "weights": {cash_proxy: 1.0},
                     "gears": {cash_proxy: "1x"},
+                    "rank1_ticker": cash_proxy,
+                    "rank1_score": None,
+                    "rank2_ticker": None,
+                    "rank2_score": None,
                 })
                 continue
 
@@ -111,14 +116,29 @@ def build_signals(
                 "assets": chosen,
                 "weights": {chosen[0]: 1.0},
                 "gears": {chosen[0]: "1x"},
+                "rank1_ticker": r1_t,
+                "rank1_score": r1_s,
+                "rank2_ticker": r2_t,
+                "rank2_score": r2_s,
             })
             continue
 
-        # -----------------------------
-        # Risk ON: choose top risky assets + leverage logic
-        # -----------------------------
+        # Risk ON
         pr = prices.loc[dt]
-        chosen, wts = choose_top_assets(dt, pr, feats, universe_kind_map, {"cash_proxy": cash_proxy, "regime_ticker": regime_ticker}, params)
+        chosen, wts, ranked_top = choose_top_assets(
+            dt,
+            pr,
+            feats,
+            universe_kind_map,
+            {"cash_proxy": cash_proxy, "regime_ticker": regime_ticker},
+            params,
+            top_k=2,
+        )
+
+        r1_t = ranked_top[0][0] if len(ranked_top) >= 1 else None
+        r1_s = ranked_top[0][1] if len(ranked_top) >= 1 else None
+        r2_t = ranked_top[1][0] if len(ranked_top) >= 2 else None
+        r2_s = ranked_top[1][1] if len(ranked_top) >= 2 else None
 
         if len(chosen) == 0:
             rows.append({
@@ -128,6 +148,10 @@ def build_signals(
                 "assets": [cash_proxy],
                 "weights": {cash_proxy: 1.0},
                 "gears": {cash_proxy: "1x"},
+                "rank1_ticker": cash_proxy,
+                "rank1_score": None,
+                "rank2_ticker": None,
+                "rank2_score": None,
             })
             continue
 
@@ -150,6 +174,10 @@ def build_signals(
             "assets": chosen,
             "weights": wts,
             "gears": gears,
+            "rank1_ticker": r1_t,
+            "rank1_score": r1_s,
+            "rank2_ticker": r2_t,
+            "rank2_score": r2_s,
         })
 
     return pd.DataFrame(rows)
