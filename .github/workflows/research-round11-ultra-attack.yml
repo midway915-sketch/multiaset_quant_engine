@@ -56,30 +56,19 @@ jobs:
 
       - name: Ensure wf_results.csv exists (convert from parquet if needed)
         if: always()
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           OUT="${{ inputs.out_dir }}"
+
           if [ -f "${OUT}/wf_results.csv" ]; then
             echo "wf_results.csv already exists."
-            exit 0
-          fi
-          if [ -f "${OUT}/wf_results.parquet" ]; then
+          elif [ -f "${OUT}/wf_results.parquet" ]; then
             echo "Converting wf_results.parquet -> wf_results.csv"
-            python - <<'PY'
-            import pandas as pd
-            import os
-            out = os.environ["OUTDIR"]
-            pq = os.path.join(out, "wf_results.parquet")
-            csv = os.path.join(out, "wf_results.csv")
-            df = pd.read_parquet(pq)
-            df.to_csv(csv, index=False)
-            print("wrote:", csv, "rows:", len(df))
-            PY
+            python -c "import pandas as pd; df=pd.read_parquet('${OUT}/wf_results.parquet'); df.to_csv('${OUT}/wf_results.csv', index=False); print('wrote', '${OUT}/wf_results.csv', 'rows', len(df))"
           else
             echo "No wf_results.csv or wf_results.parquet found in ${OUT}"
           fi
-        env:
-          OUTDIR: ${{ inputs.out_dir }}
 
       - name: List outputs
         if: always()
