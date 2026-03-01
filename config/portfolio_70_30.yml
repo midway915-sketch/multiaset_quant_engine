@@ -1,0 +1,4 @@
+selection:
+  top_n: 2
+  weighting: rank_weights
+  rank_weights: [0.70, 0.30]
