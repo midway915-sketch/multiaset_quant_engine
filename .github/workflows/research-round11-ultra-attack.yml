@@ -1,0 +1,108 @@
+name: research-round11-ultra-attack
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Price download start date (YYYY-MM-DD)"
+        required: true
+        default: "2000-01-01"
+      universe_config:
+        description: "Universe config YAML path"
+        required: true
+        default: "config/universe_round10.yml"
+      grid_config:
+        description: "Grid config YAML path"
+        required: true
+        default: "config/grid_round11_ultra_attack.yml"
+      out_dir:
+        description: "Output directory"
+        required: true
+        default: "_out/round11_ultra_attack"
+
+jobs:
+  run-grid:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pyyaml pyarrow pandas
+
+      - name: Download prices (yfinance)
+        run: |
+          mkdir -p data
+          python scripts/download_prices.py \
+            --start "${{ inputs.start_date }}" \
+            --out "data/prices.csv" \
+            --tickers-from-config "${{ inputs.universe_config }}"
+
+      - name: Run grid (round11 ultra attack)
+        run: |
+          python scripts/run_grid.py \
+            --prices "data/prices.csv" \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --out-dir "${{ inputs.out_dir }}"
+
+      - name: Ensure wf_results.csv exists (convert from parquet if needed)
+        if: always()
+        run: |
+          set -e
+          OUT="${{ inputs.out_dir }}"
+          if [ -f "${OUT}/wf_results.csv" ]; then
+            echo "wf_results.csv already exists."
+            exit 0
+          fi
+          if [ -f "${OUT}/wf_results.parquet" ]; then
+            echo "Converting wf_results.parquet -> wf_results.csv"
+            python - <<'PY'
+            import pandas as pd
+            import os
+            out = os.environ["OUTDIR"]
+            pq = os.path.join(out, "wf_results.parquet")
+            csv = os.path.join(out, "wf_results.csv")
+            df = pd.read_parquet(pq)
+            df.to_csv(csv, index=False)
+            print("wrote:", csv, "rows:", len(df))
+            PY
+          else
+            echo "No wf_results.csv or wf_results.parquet found in ${OUT}"
+          fi
+        env:
+          OUTDIR: ${{ inputs.out_dir }}
+
+      - name: List outputs
+        if: always()
+        run: |
+          echo "== outputs =="
+          find "${{ inputs.out_dir }}" -maxdepth 2 -type f | sed 's|^|  |' || true
+          echo "== head param_summary.csv =="
+          if [ -f "${{ inputs.out_dir }}/param_summary.csv" ]; then
+            head -n 30 "${{ inputs.out_dir }}/param_summary.csv"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: round11_ultra_attack_outputs
+          path: |
+            data/prices.csv
+            ${{ inputs.out_dir }}/param_summary.csv
+            ${{ inputs.out_dir }}/best_params.json
+            ${{ inputs.out_dir }}/wf_results.csv
+            ${{ inputs.out_dir }}/wf_results.parquet
+            ${{ inputs.out_dir }}/equity.csv
+            ${{ inputs.out_dir }}/equity.parquet
+            ${{ inputs.out_dir }}/compare_table.csv
+            ${{ inputs.out_dir }}/rolling10y_stats.json
