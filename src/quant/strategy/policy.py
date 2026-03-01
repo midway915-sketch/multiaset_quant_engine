@@ -1,11 +1,11 @@
 from __future__ import annotations
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 import pandas as pd
 import yaml
 
 from quant.core.calendar import month_end_dates, week_end_dates, next_trading_day
 from quant.strategy.scoring import compute_features
-from quant.strategy.allocator import choose_top_assets, pick_gear_for_asset
+from quant.strategy.allocator import choose_top_assets, pick_gear_for_asset, risk_on_candidates
 
 
 def load_params(path: str) -> Dict:
@@ -26,6 +26,22 @@ def _top2_from_candidates(candidates: pd.Series) -> Tuple[Optional[str], Optiona
     return t1, s1, t2, s2
 
 
+def _mean_score(candidates: pd.Series, assets: List[str]) -> Optional[float]:
+    if candidates is None or len(candidates) == 0:
+        return None
+    if not assets:
+        return None
+    vals = []
+    for a in assets:
+        if a in candidates.index:
+            vals.append(float(candidates.loc[a]))
+        else:
+            return None  # if any asset not eligible now, cannot keep
+    if len(vals) == 0:
+        return None
+    return float(sum(vals) / len(vals))
+
+
 def build_signals(
     prices: pd.DataFrame,
     universe_kind_map: Dict[str, str],
@@ -44,7 +60,6 @@ def build_signals(
     frequency = str(reb.get("frequency", "monthly")).lower()
     when = str(reb.get("when", "month_end")).lower()
 
-    # Decide rebalance dates
     if frequency == "weekly" or when == "week_end":
         rebal_dates = week_end_dates(dates)
     else:
@@ -60,6 +75,13 @@ def build_signals(
     reg = prices[regime_ticker]
     reg_ma = reg.rolling(regime_ma_days).mean()
     regime_on = (reg > reg_ma)
+
+    # --- hysteresis config ---
+    sel = params.get("selection", {}) or {}
+    hcfg = sel.get("hysteresis", {}) or {}
+    hyst_enabled = bool(hcfg.get("enabled", False))
+    # score improvement threshold: only switch if new portfolio mean score improves by at least this amount
+    hyst_min_improve = float(hcfg.get("min_improve", 0.0))
 
     rows = []
     for dt in rebal_dates:
@@ -107,7 +129,34 @@ def build_signals(
                     "rank2_score": None,
                 })
                 continue
-
+            # --- HYSTERESIS (Risk OFF) ---
+            # prev 보유 방어자산이 현재 후보군에 남아있고,
+            # 새 1등 점수 개선이 min_improve보다 작으면 교체하지 않음.
+            if hyst_enabled and len(rows) > 0:
+                prev = rows[-1]
+                if bool(prev.get("risk_on", True)) is False:
+                    prev_assets = prev.get("assets", []) or []
+                    if len(prev_assets) >= 1:
+                        prev_a = str(prev_assets[0])
+                        if prev_a in candidates.index and len(candidates) >= 1:
+                            prev_score = float(candidates.loc[prev_a])
+                            best_score = float(candidates.iloc[0])
+                            if (best_score - prev_score) < hyst_min_improve:
+                                # keep previous defensive holding
+                                chosen = [prev_a]
+                                rows.append({
+                                    "signal_date": dt,
+                                    "apply_date": apply_dt,
+                                    "risk_on": False,
+                                    "assets": chosen,
+                                    "weights": {chosen[0]: 1.0},
+                                    "gears": {chosen[0]: "1x"},
+                                    "rank1_ticker": r1_t,
+                                    "rank1_score": r1_s,
+                                    "rank2_ticker": r2_t,
+                                    "rank2_score": r2_s,
+                                })
+                                continue
             chosen = [str(candidates.index[0])]
             rows.append({
                 "signal_date": dt,
@@ -125,6 +174,17 @@ def build_signals(
 
         # Risk ON
         pr = prices.loc[dt]
+
+        # compute full candidates (after filters) so we can apply hysteresis against previous holdings
+        candidates = risk_on_candidates(
+            dt,
+            pr,
+            feats,
+            {"cash_proxy": cash_proxy, "regime_ticker": regime_ticker},
+            params,
+        )
+
+        # standard choice (top_n equal weights)
         chosen, wts, ranked_top = choose_top_assets(
             dt,
             pr,
@@ -155,6 +215,27 @@ def build_signals(
             })
             continue
 
+        # --- HYSTERESIS: keep previous holdings if improvement is too small ---
+        if hyst_enabled and len(rows) > 0:
+            prev = rows[-1]
+            # only apply when previous was also risk_on (avoid sticking across regime flip)
+            if bool(prev.get("risk_on", False)) is True:
+                prev_assets = prev.get("assets", []) or []
+                # Compare mean score of previous holdings vs mean score of new chosen (using CURRENT candidates)
+                prev_mean = _mean_score(candidates, [str(a) for a in prev_assets])
+                new_mean = _mean_score(candidates, [str(a) for a in chosen])
+
+                # if previous holdings are still eligible now, and improvement is small -> keep prev
+                if prev_mean is not None and new_mean is not None:
+                    if (new_mean - prev_mean) < hyst_min_improve:
+                        chosen = [str(a) for a in prev_assets]
+                        if len(chosen) == 1:
+                            wts = {chosen[0]: 1.0}
+                        else:
+                            w = 1.0 / len(chosen)
+                            wts = {t: w for t in chosen}
+
+        # compute gears for actually held assets
         gears = {}
         for a in chosen:
             gears[a] = pick_gear_for_asset(
@@ -174,6 +255,7 @@ def build_signals(
             "assets": chosen,
             "weights": wts,
             "gears": gears,
+            # keep ranking info for diagnostics (even if we decided not to switch)
             "rank1_ticker": r1_t,
             "rank1_score": r1_s,
             "rank2_ticker": r2_t,
