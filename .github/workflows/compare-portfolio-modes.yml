@@ -8,7 +8,7 @@ on:
         required: true
         default: "config/universe_round10.yml"
       grid_config:
-        description: "Grid config yml (best params grid OR single best run grid)"
+        description: "Grid config yml"
         required: true
         default: "config/grid_cagr_push2.yml"
       prices_start:
@@ -38,7 +38,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy pyyaml pyarrow yfinance
+          pip install -e .
+          pip install pyarrow yfinance
 
       - name: Download prices
         run: |
@@ -48,7 +49,6 @@ jobs:
             --tickers-from-config "${{ inputs.universe_config }}" \
             --out data/prices.csv
 
-      # A) Top1
       - name: Run grid (Top1)
         run: |
           mkdir -p "${{ inputs.out_root }}/top1"
@@ -57,9 +57,8 @@ jobs:
             --config "${{ inputs.universe_config }}" \
             --grid "${{ inputs.grid_config }}" \
             --out-dir "${{ inputs.out_root }}/top1" \
-            --portfolio-config "config/portfolio_top1.yml"
+            --portfolio-config config/portfolio_top1.yml
 
-      # B) 70:30
       - name: Run grid (70-30)
         run: |
           mkdir -p "${{ inputs.out_root }}/w70_30"
@@ -68,9 +67,8 @@ jobs:
             --config "${{ inputs.universe_config }}" \
             --grid "${{ inputs.grid_config }}" \
             --out-dir "${{ inputs.out_root }}/w70_30" \
-            --portfolio-config "config/portfolio_70_30.yml"
+            --portfolio-config config/portfolio_70_30.yml
 
-      # C) Conditional
       - name: Run grid (Conditional Top2)
         run: |
           mkdir -p "${{ inputs.out_root }}/top2_conditional"
@@ -79,7 +77,7 @@ jobs:
             --config "${{ inputs.universe_config }}" \
             --grid "${{ inputs.grid_config }}" \
             --out-dir "${{ inputs.out_root }}/top2_conditional" \
-            --portfolio-config "config/portfolio_top2_conditional.yml"
+            --portfolio-config config/portfolio_top2_conditional.yml
 
       - name: Upload artifacts
         if: always()
@@ -92,18 +90,6 @@ jobs:
             config/portfolio_top1.yml
             config/portfolio_70_30.yml
             config/portfolio_top2_conditional.yml
-            ${{ inputs.out_root }}/top1/param_summary.csv
-            ${{ inputs.out_root }}/top1/metrics_pretty.json
-            ${{ inputs.out_root }}/top1/picks_top2_weekly.csv
-            ${{ inputs.out_root }}/top1/rebalance_log.csv
-            ${{ inputs.out_root }}/top1/yearly_returns.csv
-            ${{ inputs.out_root }}/w70_30/param_summary.csv
-            ${{ inputs.out_root }}/w70_30/metrics_pretty.json
-            ${{ inputs.out_root }}/w70_30/picks_top2_weekly.csv
-            ${{ inputs.out_root }}/w70_30/rebalance_log.csv
-            ${{ inputs.out_root }}/w70_30/yearly_returns.csv
-            ${{ inputs.out_root }}/top2_conditional/param_summary.csv
-            ${{ inputs.out_root }}/top2_conditional/metrics_pretty.json
-            ${{ inputs.out_root }}/top2_conditional/picks_top2_weekly.csv
-            ${{ inputs.out_root }}/top2_conditional/rebalance_log.csv
-            ${{ inputs.out_root }}/top2_conditional/yearly_returns.csv
+            ${{ inputs.out_root }}/top1/**
+            ${{ inputs.out_root }}/w70_30/**
+            ${{ inputs.out_root }}/top2_conditional/**
