@@ -1,0 +1,79 @@
+name: grid-cagr-breakout
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_config:
+        description: "Universe config yml"
+        required: true
+        default: "config/universe_round10.yml"
+      grid_config:
+        description: "Grid config yml"
+        required: true
+        default: "config/grid_cagr_breakout.yml"
+      prices_start:
+        description: "Price download start date"
+        required: true
+        default: "2000-01-01"
+      out_dir:
+        description: "Output directory"
+        required: true
+        default: "out/grid_cagr_breakout"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow yfinance
+
+      - name: Download prices
+        run: |
+          mkdir -p data
+          python scripts/download_prices.py \
+            --start "${{ inputs.prices_start }}" \
+            --tickers-from-config "${{ inputs.universe_config }}" \
+            --out data/prices.csv
+
+      - name: Run grid
+        run: |
+          mkdir -p "${{ inputs.out_dir }}"
+          python scripts/run_grid.py \
+            --prices data/prices.csv \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --out-dir "${{ inputs.out_dir }}"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grid-cagr-breakout-results
+          if-no-files-found: error
+          path: |
+            data/prices.csv
+            ${{ inputs.universe_config }}
+            ${{ inputs.grid_config }}
+            ${{ inputs.out_dir }}/debug_paths.json
+            ${{ inputs.out_dir }}/wf_results.csv
+            ${{ inputs.out_dir }}/wf_results.parquet
+            ${{ inputs.out_dir }}/param_summary.csv
+            ${{ inputs.out_dir }}/best_params.json
+            ${{ inputs.out_dir }}/metrics_pretty.json
+            ${{ inputs.out_dir }}/rebalance_log.csv
+            ${{ inputs.out_dir }}/picks_top2_weekly.csv
+            ${{ inputs.out_dir }}/yearly_returns.csv
