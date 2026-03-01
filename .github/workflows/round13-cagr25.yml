@@ -6,7 +6,7 @@ on:
       universe_config:
         description: "Universe config yml"
         required: true
-        default: "config/universe.yml"
+        default: "config/universe_round10.yml"
       grid_config:
         description: "Grid config yml"
         required: true
