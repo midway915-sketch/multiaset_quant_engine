@@ -1,0 +1,115 @@
+name: params-pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_config:
+        description: "Universe config yml"
+        required: true
+        default: "config/universe_round10.yml"
+      prices_path:
+        description: "Prices file path (repo-relative). If missing, workflow will download prices."
+        required: false
+        default: "data/prices.csv"
+      prices_start:
+        description: "If downloading prices, start date"
+        required: true
+        default: "2000-01-01"
+      params_base_dir:
+        description: "Directory containing params json files"
+        required: true
+        default: "configs/best"
+      p1:
+        description: "Params file 1 (filename or path)"
+        required: true
+        default: "round5.json"
+      p2:
+        description: "Params file 2 (filename or path)"
+        required: true
+        default: "round7b.json"
+      p3:
+        description: "Params file 3 (filename or path)"
+        required: true
+        default: "round8.json"
+      out_dir:
+        description: "Output root directory"
+        required: true
+        default: "out/params_pack"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Ensure data dir
+        run: |
+          mkdir -p data
+
+      - name: Download prices (if missing)
+        run: |
+          set -e
+          if [ -f "${{ inputs.prices_path }}" ]; then
+            echo "Prices exist: ${{ inputs.prices_path }}"
+            exit 0
+          fi
+
+          echo "Prices not found -> downloading to ${{ inputs.prices_path }}"
+          python scripts/download_prices.py \
+            --start "${{ inputs.prices_start }}" \
+            --tickers-from-config "${{ inputs.universe_config }}" \
+            --out "${{ inputs.prices_path }}"
+
+      - name: Run params pack (3 runs)
+        run: |
+          set -e
+          mkdir -p "${{ inputs.out_dir }}"
+
+          python scripts/run_params_pack.py \
+            --prices "${{ inputs.prices_path }}" \
+            --config "${{ inputs.universe_config }}" \
+            --params-base-dir "${{ inputs.params_base_dir }}" \
+            --out-dir "${{ inputs.out_dir }}" \
+            --params "${{ inputs.p1 }}" "${{ inputs.p2 }}" "${{ inputs.p3 }}"
+
+      - name: Show summary
+        run: |
+          set -e
+          if [ -f "${{ inputs.out_dir }}/summary.csv" ]; then
+            echo "===== summary.csv ====="
+            cat "${{ inputs.out_dir }}/summary.csv"
+          else
+            echo "summary.csv not found"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: params-pack-results
+          path: |
+            ${{ inputs.out_dir }}/summary.csv
+            ${{ inputs.out_dir }}/best_*/metrics_pretty.json
+            ${{ inputs.out_dir }}/best_*/yearly_returns.csv
+            ${{ inputs.out_dir }}/best_*/rebalance_log.csv
+            ${{ inputs.out_dir }}/best_*/equity*.csv
+            ${{ inputs.out_dir }}/best_*/weights*.csv
+            ${{ inputs.out_dir }}/best_*/trades*.csv
+            ${{ inputs.out_dir }}/best_*/plots/*
+            ${{ inputs.prices_path }}
+            ${{ inputs.universe_config }}
+            ${{ inputs.params_base_dir }}/${{ inputs.p1 }}
+            ${{ inputs.params_base_dir }}/${{ inputs.p2 }}
+            ${{ inputs.params_base_dir }}/${{ inputs.p3 }}
