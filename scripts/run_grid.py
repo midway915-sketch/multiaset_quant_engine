@@ -40,13 +40,64 @@ def save_df(df: pd.DataFrame, out: Path, stem: str):
         df.to_csv(out / f"{stem}.csv", index=False)
 
 
-def _safe_load_json(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+def _get(d: dict, path: list[str], default=None):
+    cur = d
+    for k in path:
+        if not isinstance(cur, dict) or k not in cur:
+            return default
+        cur = cur[k]
+    return cur
+
+
+def params_to_row(p: dict) -> dict:
+    """
+    Pick key knobs so param_summary is readable.
+    Also include full params_json for perfect reproducibility.
+    """
+    row = {
+        # rebalance / selection
+        "reb_freq": _get(p, ["rebalance", "frequency"]),
+        "reb_when": _get(p, ["rebalance", "when"]),
+        "top_n": _get(p, ["selection", "top_n"]),
+        "weighting": _get(p, ["selection", "weighting"]),
+
+        # regime / filters
+        "regime_ma_days": _get(p, ["filters", "regime_ma_days"]),
+        "abs_mom_min": _get(p, ["filters", "abs_mom_min"]),
+        "trend_fast": _get(p, ["filters", "trend_fast"]),
+        "trend_slow": _get(p, ["filters", "trend_slow"]),
+
+        # weights (momentum blend)
+        "w_1m": _get(p, ["weights", "w_1m"]),
+        "w_6m": _get(p, ["weights", "w_6m"]),
+        "w_12m": _get(p, ["weights", "w_12m"]),
+
+        # leverage
+        "lev_enabled": _get(p, ["leverage", "enabled"]),
+        "equity_only": _get(p, ["leverage", "equity_only"]),
+        "use_trend_confirm": _get(p, ["leverage", "use_trend_confirm"]),
+        "use_vol_target": _get(p, ["leverage", "use_vol_target"]),
+        "vol_target_annual": _get(p, ["leverage", "vol_target_annual"]),
+        "vol_lookback_days": _get(p, ["leverage", "vol_lookback_days"]),
+        "max_leverage": _get(p, ["leverage", "max_leverage"]),
+        "gear_cut_2x": _get(p, ["leverage", "gear_cut_2x"]),
+        "gear_cut_3x": _get(p, ["leverage", "gear_cut_3x"]),
+
+        # hybrid bull 3x
+        "use_hybrid_bull_3x": _get(p, ["leverage", "use_hybrid_bull_3x"]),
+        "bull_vol_ticker": _get(p, ["leverage", "bull_vol_ticker"]),
+        "bull_vol_lookback_days": _get(p, ["leverage", "bull_vol_lookback_days"]),
+        "bull_vol_max_annual": _get(p, ["leverage", "bull_vol_max_annual"]),
+        "force_3x_assets": json.dumps(_get(p, ["leverage", "force_3x_assets"]), ensure_ascii=False),
+
+        # costs
+        "buy_cost": _get(p, ["costs", "buy"]),
+        "sell_cost": _get(p, ["costs", "sell"]),
+
+        # full reproducibility
+        "params_json": json.dumps(p, ensure_ascii=False),
+    }
+    return row
 
 
 def main():
@@ -61,6 +112,9 @@ def main():
     )
     param_sets = make_param_sets(base_params, grid_cfg["grid"])
 
+    ensure_dir(args.out_dir)
+    outp = Path(args.out_dir)
+
     df_long = load_prices_long(args.prices)
     prices_full = to_wide_adj_close(df_long)
 
@@ -73,9 +127,6 @@ def main():
         test_years=grid_cfg["walkforward"]["test_years"],
         step_years=grid_cfg["walkforward"]["step_years"],
     )
-
-    ensure_dir(args.out_dir)
-    outp = Path(args.out_dir)
 
     kind_map = uni.kind_map()
     rp_full = ReturnProvider(
@@ -135,51 +186,39 @@ def main():
     save_df(results, outp, "wf_results")
 
     summary = summarize_by_param(results) if len(results) else pd.DataFrame()
+
+    if not len(summary):
+        (outp / "param_summary.csv").write_text("", encoding="utf-8")
+        print("[run_grid] no results", flush=True)
+        return
+
+    # ✅ Build param_id -> params columns dataframe
+    params_rows = []
+    for p in param_sets:
+        pid = param_id(p)
+        r = {"param_id": pid}
+        r.update(params_to_row(p))
+        params_rows.append(r)
+    params_df = pd.DataFrame(params_rows)
+
+    # ✅ Merge into param_summary
+    summary = summary.merge(params_df, on="param_id", how="left")
+
     summary_path = outp / "param_summary.csv"
     summary.to_csv(summary_path, index=False)
 
-    if not len(summary):
-        print("[run_grid] no results")
-        return
-
+    # pick best
     best_pid = summary.iloc[0]["param_id"]
-    best = None
-    for p in param_sets:
-        if param_id(p) == best_pid:
-            best = p
-            break
-
-    (outp / "best_params.json").write_text(json.dumps(best, indent=2), encoding="utf-8")
+    best_row = params_df.loc[params_df["param_id"] == best_pid].iloc[0]
+    best_params = json.loads(best_row["params_json"])
+    (outp / "best_params.json").write_text(json.dumps(best_params, indent=2), encoding="utf-8")
 
     print("[run_grid] Running full backtest for BEST params...", flush=True)
 
-    # BEST PARAM FULL BACKTEST (전체 구간)
-    signals_best = build_signals(prices_full, kind_map, uni.regime_ticker, uni.cash_proxy, best)
-    equity_full, weights_full, trades_full = run_backtest(prices_full, signals_best, rp_full, best["costs"])
+    signals_best = build_signals(prices_full, kind_map, uni.regime_ticker, uni.cash_proxy, best_params)
+    equity_full, weights_full, trades_full = run_backtest(prices_full, signals_best, rp_full, best_params["costs"])
 
-    # 여기서 metrics_pretty.json + picks_top2_weekly.csv 생성됨
     generate_report(str(outp), equity_full, weights_full, trades_full)
-
-    # ✅ metrics_pretty.json에서 Last10Y를 읽어서 param_summary의 best 행에 주입
-    metrics = _safe_load_json(outp / "metrics_pretty.json")
-    last10_cols = {
-        "Last10Y_SeedMultiple": metrics.get("Last10Y_SeedMultiple"),
-        "Last10Y_CAGR": metrics.get("Last10Y_CAGR"),
-        "Last10Y_MDD": metrics.get("Last10Y_MDD"),
-    }
-
-    try:
-        ps = pd.read_csv(summary_path)
-        for c in ["Last10Y_SeedMultiple", "Last10Y_CAGR", "Last10Y_MDD"]:
-            if c not in ps.columns:
-                ps[c] = pd.NA
-        ps.loc[ps["param_id"] == best_pid, "Last10Y_SeedMultiple"] = last10_cols["Last10Y_SeedMultiple"]
-        ps.loc[ps["param_id"] == best_pid, "Last10Y_CAGR"] = last10_cols["Last10Y_CAGR"]
-        ps.loc[ps["param_id"] == best_pid, "Last10Y_MDD"] = last10_cols["Last10Y_MDD"]
-        ps.to_csv(summary_path, index=False)
-        print("[run_grid] injected Last10Y_* into param_summary (best row only)", flush=True)
-    except Exception as e:
-        print(f"[run_grid] failed to inject Last10Y into param_summary: {e}", flush=True)
 
     print(f"[run_grid] done -> {outp}", flush=True)
 
