@@ -16,6 +16,8 @@ from quant.grid.grid import make_param_sets, param_id
 from quant.grid.walkforward import make_walkforward_windows
 from quant.grid.ranker import summarize_by_param
 from quant.report.artifacts import ensure_dir
+from quant.report.generate import generate_report
+
 
 def parse_args():
     ap = argparse.ArgumentParser()
@@ -25,16 +27,27 @@ def parse_args():
     ap.add_argument("--out-dir", required=True)
     return ap.parse_args()
 
+
 def slice_prices(prices: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     return prices.loc[(prices.index >= start) & (prices.index <= end)]
+
 
 def save_df(df: pd.DataFrame, out: Path, stem: str):
     pq = out / f"{stem}.parquet"
     try:
         df.to_parquet(pq, index=False)
-        return
     except Exception:
         df.to_csv(out / f"{stem}.csv", index=False)
+
+
+def _safe_load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
 
 def main():
     args = parse_args()
@@ -77,20 +90,15 @@ def main():
     total_eval = total_params * total_windows
 
     print(f"[run_grid] params={total_params}, windows={total_windows}, evals~={total_eval}", flush=True)
-    print(f"[run_grid] out_dir={outp}", flush=True)
 
     results_rows = []
     done = 0
-    last_print = time.time()
-    PRINT_EVERY_EVALS = 50  # adjust if you want more/less noise
 
     for pi, p in enumerate(param_sets, start=1):
         pid = param_id(p)
-
-        # Precompute signals once per param set
         signals_all = build_signals(prices_full, kind_map, uni.regime_ticker, uni.cash_proxy, p)
 
-        print(f"[run_grid] ({pi}/{total_params}) param_id={pid} signals={len(signals_all)}", flush=True)
+        print(f"[run_grid] ({pi}/{total_params}) param_id={pid}", flush=True)
 
         for wi, w in enumerate(windows):
             ptest = slice_prices(prices_full, w.test_start, w.test_end)
@@ -117,35 +125,64 @@ def main():
             })
 
             done += 1
-            if (done % PRINT_EVERY_EVALS) == 0:
-                now = time.time()
-                elapsed = now - t0
-                rate = done / elapsed if elapsed > 0 else 0.0
-                eta = (total_eval - done) / rate if rate > 0 else float("inf")
-                print(
-                    f"[run_grid] progress {done}/{total_eval} "
-                    f"({done/total_eval:.1%}) elapsed={elapsed/60:.1f}m eta={eta/60:.1f}m",
-                    flush=True
-                )
-                last_print = now
+            if done % 50 == 0:
+                elapsed = time.time() - t0
+                rate = done / elapsed if elapsed > 0 else 0
+                eta = (total_eval - done) / rate if rate > 0 else 0
+                print(f"[run_grid] {done}/{total_eval} ({done/total_eval:.1%}) ETA {eta/60:.1f}m", flush=True)
 
     results = pd.DataFrame(results_rows)
     save_df(results, outp, "wf_results")
 
     summary = summarize_by_param(results) if len(results) else pd.DataFrame()
-    summary.to_csv(outp / "param_summary.csv", index=False)
+    summary_path = outp / "param_summary.csv"
+    summary.to_csv(summary_path, index=False)
 
-    if len(summary):
-        best_pid = summary.iloc[0]["param_id"]
-        best = None
-        for p in param_sets:
-            if param_id(p) == best_pid:
-                best = p
-                break
-        if best is not None:
-            (outp / "best_params.json").write_text(json.dumps(best, indent=2), encoding="utf-8")
+    if not len(summary):
+        print("[run_grid] no results")
+        return
 
-    print(f"[run_grid] saved -> {outp}", flush=True)
+    best_pid = summary.iloc[0]["param_id"]
+    best = None
+    for p in param_sets:
+        if param_id(p) == best_pid:
+            best = p
+            break
+
+    (outp / "best_params.json").write_text(json.dumps(best, indent=2), encoding="utf-8")
+
+    print("[run_grid] Running full backtest for BEST params...", flush=True)
+
+    # BEST PARAM FULL BACKTEST (전체 구간)
+    signals_best = build_signals(prices_full, kind_map, uni.regime_ticker, uni.cash_proxy, best)
+    equity_full, weights_full, trades_full = run_backtest(prices_full, signals_best, rp_full, best["costs"])
+
+    # 여기서 metrics_pretty.json + picks_top2_weekly.csv 생성됨
+    generate_report(str(outp), equity_full, weights_full, trades_full)
+
+    # ✅ metrics_pretty.json에서 Last10Y를 읽어서 param_summary의 best 행에 주입
+    metrics = _safe_load_json(outp / "metrics_pretty.json")
+    last10_cols = {
+        "Last10Y_SeedMultiple": metrics.get("Last10Y_SeedMultiple"),
+        "Last10Y_CAGR": metrics.get("Last10Y_CAGR"),
+        "Last10Y_MDD": metrics.get("Last10Y_MDD"),
+    }
+
+    try:
+        ps = pd.read_csv(summary_path)
+        for c in ["Last10Y_SeedMultiple", "Last10Y_CAGR", "Last10Y_MDD"]:
+            if c not in ps.columns:
+                ps[c] = pd.NA
+        ps.loc[ps["param_id"] == best_pid, "Last10Y_SeedMultiple"] = last10_cols["Last10Y_SeedMultiple"]
+        ps.loc[ps["param_id"] == best_pid, "Last10Y_CAGR"] = last10_cols["Last10Y_CAGR"]
+        ps.loc[ps["param_id"] == best_pid, "Last10Y_MDD"] = last10_cols["Last10Y_MDD"]
+        ps.to_csv(summary_path, index=False)
+        print("[run_grid] injected Last10Y_* into param_summary (best row only)", flush=True)
+    except Exception as e:
+        print(f"[run_grid] failed to inject Last10Y into param_summary: {e}", flush=True)
+
+    print(f"[run_grid] done -> {outp}", flush=True)
+
 
 if __name__ == "__main__":
     main()
