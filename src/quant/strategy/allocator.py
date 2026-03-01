@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 
@@ -13,9 +13,18 @@ def choose_top_assets(
     universe_kinds: Dict[str, str],
     universe_cfg: Dict,
     params: Dict,
-) -> Tuple[List[str], Dict[str, float]]:
-    top_n = params["selection"]["top_n"]
-    abs_mom_min = params["filters"]["abs_mom_min"]
+    top_k: int = 2,
+) -> Tuple[List[str], Dict[str, float], List[Tuple[str, float]]]:
+    """
+    Choose top assets under absolute filters and return:
+
+      - chosen: list of assets to actually hold (size = params['selection']['top_n'])
+      - weights: dict of weights for chosen assets
+      - ranked_top: list of (ticker, score) for the top_k candidates (for logging),
+                    where score is feats['risk_adj'] for that dt.
+    """
+    top_n = int(params["selection"]["top_n"])
+    abs_mom_min = float(params["filters"]["abs_mom_min"])
 
     risk_adj_row = feats["risk_adj"].loc[dt]
     abs_mom_row = feats["abs_mom"].loc[dt]
@@ -25,7 +34,7 @@ def choose_top_assets(
     abs_mom_row = abs_mom_row.reindex(prices_row.index)
 
     # MA200 (per-asset) injected by policy
-    ma200_row = feats["_ma200"].loc[dt]
+    ma200_row = feats.get("_ma200", pd.DataFrame()).loc[dt] if "_ma200" in feats else pd.Series(index=prices_row.index, data=np.nan)
     if isinstance(ma200_row, pd.Series):
         ma200_row = ma200_row.reindex(prices_row.index)
     else:
@@ -35,45 +44,23 @@ def choose_top_assets(
     pass_abs = (abs_mom_row > abs_mom_min) & (prices_row > ma200_row)
     pass_abs = pass_abs.fillna(False)
 
-    # ---------------------------------------------------------
-    # IMPORTANT: cash proxy should NOT be part of "top assets" ranking.
-    # It is a fallback when no risky asset qualifies (or risk_off upstream).
-    # ---------------------------------------------------------
-    cash_proxy = (
-        universe_cfg.get("cash_proxy")
-        or params.get("cash_proxy")
-        or "BIL"
-    )
+    # cash proxy should NOT be part of "top assets" ranking (fallback handled elsewhere)
+    cash_proxy = (universe_cfg.get("cash_proxy") or params.get("cash_proxy") or "BIL")
     if cash_proxy in pass_abs.index:
         pass_abs.loc[cash_proxy] = False
-
-    # -------------------------
-    # DEBUG (keep logs small)
-    # -------------------------
-    if dt >= pd.Timestamp("2023-01-01") and dt.day <= 7:
-        n_pass = int(pass_abs.sum())
-        n_riskadj = int(risk_adj_row[pass_abs].notna().sum())
-        if n_pass > 0:
-            sample = (
-                risk_adj_row[pass_abs]
-                .replace([np.inf, -np.inf], np.nan)
-                .dropna()
-                .sort_values(ascending=False)
-                .head(5)
-                .to_dict()
-            )
-
 
     candidates = risk_adj_row[pass_abs].replace([np.inf, -np.inf], np.nan).dropna()
     candidates = candidates.sort_values(ascending=False)
 
+    ranked_top = [(str(k), float(v)) for k, v in candidates.head(int(top_k)).items()]
+
     chosen = candidates.index[:top_n].tolist()
     if len(chosen) == 0:
-        return [], {}
+        return [], {}, ranked_top
     if len(chosen) == 1:
-        return chosen, {chosen[0]: 1.0}
+        return chosen, {chosen[0]: 1.0}, ranked_top
     w = 1.0 / len(chosen)
-    return chosen, {t: w for t in chosen}
+    return chosen, {t: w for t in chosen}, ranked_top
 
 
 def _realized_vol_annual(prices: pd.Series, dt: pd.Timestamp, lookback: int) -> float:
@@ -122,9 +109,7 @@ def pick_gear_for_asset(
         if not (ma_fast.loc[dt] > ma_slow.loc[dt]):
             return "1x"
 
-    # ---------------------------------------------------------
-    # NEW: Hybrid Bull-3x mode
-    # ---------------------------------------------------------
+    # Hybrid Bull-3x mode
     if lev.get("use_hybrid_bull_3x", False):
         bull_ticker = str(lev.get("bull_vol_ticker", "SPY"))
         bull_lookback = int(lev.get("bull_vol_lookback_days", 21))
@@ -136,9 +121,7 @@ def pick_gear_for_asset(
             if np.isfinite(mvol) and mvol <= bull_vol_max:
                 return "3x"
 
-    # -----------------------------
     # Vol targeting leverage mode (discretized to 1x/2x/3x)
-    # -----------------------------
     if lev.get("use_vol_target", False):
         target = float(lev.get("vol_target_annual", 0.30))
         lookback = int(lev.get("vol_lookback_days", 63))
@@ -162,9 +145,7 @@ def pick_gear_for_asset(
             return "2x"
         return "1x"
 
-    # -----------------------------
     # Existing: ratio mode (v20 / v1y)
-    # -----------------------------
     v20 = feats["vol20"].loc[dt, asset]
     v1y = feats["vol1y"].loc[dt, asset]
     if pd.isna(v20) or pd.isna(v1y) or v1y == 0:
