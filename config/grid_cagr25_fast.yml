@@ -1,0 +1,46 @@
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 2
+
+grid:
+  # weekly
+  rebalance.frequency: ["weekly"]
+  rebalance.when: ["week_end"]
+
+  # 1등 1종목 유지
+  selection.top_n: [1]
+  selection.weighting: ["equal"]
+
+  # risk-on 기회 늘리기 (3개 -> 2개로 축소)
+  filters.regime_ma_days: [60, 100]
+  filters.abs_mom_min: [0.00]
+
+  # 25% 목표: 단기 쏠림 고정 (조합 폭발 방지)
+  weights.w_1m:  [0.70]
+  weights.w_6m:  [0.20]
+  weights.w_12m: [0.10]
+
+  # leverage: 핵심 축만 남기기 (2×2 = 4조합)
+  leverage.enabled: [true]
+  leverage.equity_only: [true]
+  leverage.use_vol_target: [true]
+  leverage.vol_target_annual: [0.70, 0.80]
+  leverage.vol_lookback_days: [21]
+  leverage.max_leverage: [3.0]
+  leverage.gear_cut_2x: [1.3]
+  leverage.gear_cut_3x: [2.2]
+
+  # 트렌드 컨펌은 일단 OFF로 고정(가장 공격적, 조합 줄이기 핵심)
+  leverage.use_trend_confirm: [false]
+
+  # hybrid bull 3x: 켜되 조건은 고정(조합 줄이기)
+  leverage.use_hybrid_bull_3x: [true]
+  leverage.bull_vol_ticker: ["SPY"]
+  leverage.bull_vol_lookback_days: [21]
+  leverage.bull_vol_max_annual: [0.35]
+  leverage.force_3x_assets: [["QQQ", "SMH"]]
+
+  # costs
+  costs.buy: [0.0007]
+  costs.sell: [0.0007]
