@@ -1,0 +1,50 @@
+walkforward:
+  train_years: 5
+  test_years: 3
+  step_years: 2
+
+grid:
+  # Rebalance: 주간 고정
+  rebalance.frequency: ["weekly"]
+  rebalance.when: ["week_end"]
+  rebalance.entry: ["next_close"]
+
+  # Regime: 빠르게(리스크온 늘리기)
+  filters.regime_ma_days: [40, 60, 80, 100]
+
+  # Selection: 1등 집중 (CAGR 최대)
+  selection.top_n: [1]
+  filters.abs_mom_min: [0.00]   # 컷 거의 안 걸기
+
+  # Momentum: 단기 쏠림(공격)
+  weights.w_1m: [0.70, 0.85]
+  weights.w_6m: [0.20, 0.10]
+  weights.w_12m: [0.10, 0.05]
+
+  # Leverage: 공격적으로
+  leverage.enabled: [true]
+  leverage.equity_only: [true]
+
+  # 트렌드 컨펌 OFF (진입 막는 장치 제거)
+  leverage.use_trend_confirm: [false]
+
+  # Hybrid bull 3x ON (3x 구간 늘리기)
+  leverage.use_hybrid_bull_3x: [true]
+  leverage.bull_vol_ticker: ["SPY"]
+  leverage.bull_vol_lookback_days: [21]
+  leverage.bull_vol_max_annual: [0.35, 0.45]     # 3x 허용 더 자주
+  leverage.force_3x_assets: [["QQQ", "SMH"]]
+
+  # Vol targeting: 타겟을 더 높게 + 더 빠른 lookback
+  leverage.use_vol_target: [true]
+  leverage.vol_target_annual: [0.90, 1.10, 1.30]
+  leverage.vol_lookback_days: [14, 21]
+  leverage.max_leverage: [3.0]
+
+  # cut 낮춰서 2x/3x 더 쉽게
+  leverage.gear_cut_2x: [1.15, 1.30]
+  leverage.gear_cut_3x: [2.00, 2.20]
+
+  # Costs
+  costs.buy: [0.0007]
+  costs.sell: [0.0007]
