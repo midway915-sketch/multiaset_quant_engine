@@ -1,0 +1,110 @@
+name: compare-portfolio-modes
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_config:
+        description: "Universe config yml"
+        required: true
+        default: "config/universe_round10.yml"
+      grid_config:
+        description: "Grid config yml (best params grid OR single best run grid)"
+        required: true
+        default: "config/grid_cagr_push2.yml"
+      prices_start:
+        description: "Price download start date"
+        required: true
+        default: "2000-01-01"
+      out_root:
+        description: "Root output dir"
+        required: true
+        default: "out/compare_portfolio_modes"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyarrow
+
+      - name: Download prices
+        run: |
+          mkdir -p data
+          python scripts/download_prices.py \
+            --start "${{ inputs.prices_start }}" \
+            --tickers-from-config "${{ inputs.universe_config }}" \
+            --out data/prices.csv
+
+      # A) Top1
+      - name: Run grid (Top1)
+        run: |
+          mkdir -p "${{ inputs.out_root }}/top1"
+          python scripts/run_grid.py \
+            --prices data/prices.csv \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --out-dir "${{ inputs.out_root }}/top1" \
+            --portfolio-config "config/portfolio_top1.yml"
+
+      # B) 70:30
+      - name: Run grid (70-30)
+        run: |
+          mkdir -p "${{ inputs.out_root }}/w70_30"
+          python scripts/run_grid.py \
+            --prices data/prices.csv \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --out-dir "${{ inputs.out_root }}/w70_30" \
+            --portfolio-config "config/portfolio_70_30.yml"
+
+      # C) Conditional
+      - name: Run grid (Conditional Top2)
+        run: |
+          mkdir -p "${{ inputs.out_root }}/top2_conditional"
+          python scripts/run_grid.py \
+            --prices data/prices.csv \
+            --config "${{ inputs.universe_config }}" \
+            --grid "${{ inputs.grid_config }}" \
+            --out-dir "${{ inputs.out_root }}/top2_conditional" \
+            --portfolio-config "config/portfolio_top2_conditional.yml"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compare-portfolio-modes-results
+          if-no-files-found: error
+          path: |
+            data/prices.csv
+            config/portfolio_top1.yml
+            config/portfolio_70_30.yml
+            config/portfolio_top2_conditional.yml
+            ${{ inputs.out_root }}/top1/param_summary.csv
+            ${{ inputs.out_root }}/top1/metrics_pretty.json
+            ${{ inputs.out_root }}/top1/picks_top2_weekly.csv
+            ${{ inputs.out_root }}/top1/rebalance_log.csv
+            ${{ inputs.out_root }}/top1/yearly_returns.csv
+            ${{ inputs.out_root }}/w70_30/param_summary.csv
+            ${{ inputs.out_root }}/w70_30/metrics_pretty.json
+            ${{ inputs.out_root }}/w70_30/picks_top2_weekly.csv
+            ${{ inputs.out_root }}/w70_30/rebalance_log.csv
+            ${{ inputs.out_root }}/w70_30/yearly_returns.csv
+            ${{ inputs.out_root }}/top2_conditional/param_summary.csv
+            ${{ inputs.out_root }}/top2_conditional/metrics_pretty.json
+            ${{ inputs.out_root }}/top2_conditional/picks_top2_weekly.csv
+            ${{ inputs.out_root }}/top2_conditional/rebalance_log.csv
+            ${{ inputs.out_root }}/top2_conditional/yearly_returns.csv
